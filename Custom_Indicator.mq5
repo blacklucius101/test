@@ -45,12 +45,12 @@
 #property indicator_label7 "Bullish Event"
 #property indicator_type7  DRAW_ARROW
 #property indicator_color7 clrLime
-#property indicator_width7 2
+#property indicator_width7 1
 //--- plot BearBorder Events
 #property indicator_label8 "Bearish Event"
 #property indicator_type8  DRAW_ARROW
 #property indicator_color8 clrYellow
-#property indicator_width8 2
+#property indicator_width8 1
 
 //--- input parameters
 input datetime InpHistoricalDate = 0;   // Historical Date (YYYY.MM.DD) - 0 for Current Day
@@ -89,10 +89,21 @@ enum EInteractionType {
    INT_LOW
 };
 
+enum EBorderLevel {
+   INT_NULL,
+   INT_30,
+   INT_40,
+   INT_50,
+   INT_60,
+   INT_70
+};
+
 struct BorderState { // Tracks internal border
-   bool          crossState;
+   EBorderLevel crossState;
    EInteractionType pushState;
    double retLevel;
+   int bufferCrossCount;
+   int bufferDelayCount;
 };
 
 struct LevelState { // Tracks level 2 high/low (level 1 is a minor consequence)
@@ -114,13 +125,22 @@ BorderState supState;
 datetime targetDayStart = 0;
 datetime targetDayEnd = 0;
 
+int handle_lesserRSI;
+int handle_greaterRSI;
+int handle_Mama_Fama;
+
+double lesserRSI[2];
+double greaterRSI[1];
+double Mama[1];
+double Fama[1];
+
 //+------------------------------------------------------------------+
 //| Custom indicator initialization function                         |
 //+------------------------------------------------------------------+
 int OnInit()
 {
    IndicatorSetInteger(INDICATOR_DIGITS, _Digits);
-
+   
    //--- indicator buffers mapping
    //--- use normal array indexing (oldest bar at index 0)
    SetIndexBuffer(0, BufferUp, INDICATOR_DATA);
@@ -173,6 +193,19 @@ int OnInit()
    
    targetDayStart = 0;
    targetDayEnd = 0;
+   
+   lesserRSI[0] = 0;
+   lesserRSI[1] = 0;
+   greaterRSI[0] = 0;
+   Mama[0] = 0;
+   Fama[0] = 0;
+   
+   handle_lesserRSI = iCustom(_Symbol, _Period, "Custom\\RSI", 14);
+   handle_greaterRSI = iCustom(_Symbol, _Period, "Custom\\RSI", 75);
+   handle_Mama_Fama = iCustom(_Symbol, _Period, "Custom\\Mama + fama", 0.5, 0.05, PRICE_MEDIAN);
+   
+   if(handle_Mama_Fama == INVALID_HANDLE)
+      return INIT_FAILED;
 
    return(INIT_SUCCEEDED);
 }
@@ -189,9 +222,11 @@ void OnDeinit(const int reason)
 //| Reset the state for a specific level                             |
 //+------------------------------------------------------------------+
 void ResetBorderState(BorderState &bs) {
-   bs.crossState = false;
+   bs.crossState = INT_NULL;
    bs.pushState = INT_NONE;
    bs.retLevel = 0;
+   bs.bufferCrossCount = 0;
+   bs.bufferDelayCount = 0;
 }
 
 void ResetLevelState(LevelState &state) {
@@ -315,6 +350,11 @@ void DrawLockLine(int barIndex, datetime t, color clr, string prefix) {
       ObjectSetInteger(0, name, OBJPROP_BACK, true);
    }
 }
+
+//+------------------------------------------------------------------+
+//| RSI band processing                                              |
+//+------------------------------------------------------------------+
+
 
 //+------------------------------------------------------------------+
 //| Process semafors for a specific level and candle index           |
@@ -454,12 +494,13 @@ void ProcessLevel(int idx, int period, int backstep, int firstBar, const double 
          resState.retLevel = state.highAnchors[1].price - NormalizeDouble(currLegHigh * 0.5, 2);
          
          if(state.highAnchors[1].price > state.highAnchors[0].price) {
-            if(NormalizeDouble(currLegHigh / prevLegHigh, 2) > 1.5) {
-               if(pHigh[idx] >= (state.lowAnchors[1].price + NormalizeDouble(prevLegHigh * 1.5, 2))) {
+            if(NormalizeDouble(currLegHigh / prevLegHigh, 2) > 1) {
+               //if(pClose[idx] >= (state.lowAnchors[1].price + NormalizeDouble(prevLegHigh * 1, 2))) {
+               if(pClose[idx] >= state.highAnchors[0].price) {
                   if(resState.pushState == INT_NONE) DrawLockLine(idx, pTime[idx], clrLime, "L2_Bullish_Lock");
                   resState.pushState = INT_HIGH;
                   supState.pushState = INT_NONE;
-                  resState.crossState = false;
+                  resState.crossState = INT_NULL;
                }
             }
          }
@@ -517,12 +558,13 @@ void ProcessLevel(int idx, int period, int backstep, int firstBar, const double 
          supState.retLevel = state.lowAnchors[1].price + NormalizeDouble(currLegLow * 0.5, 2);
          
          if(state.lowAnchors[1].price < state.lowAnchors[0].price) {
-            if(NormalizeDouble(currLegLow / prevLegLow, 2) > 1.5) {
-               if(pLow[idx] <= (state.highAnchors[1].price - NormalizeDouble(prevLegLow * 1.5, 2))) {
+            if(NormalizeDouble(currLegLow / prevLegLow, 2) > 1) {
+               //if(pLow[idx] <= (state.highAnchors[1].price - NormalizeDouble(prevLegLow * 1, 2))) {
+               if(pLow[idx] <= state.lowAnchors[0].price) {
                   if(supState.pushState == INT_NONE) DrawLockLine(idx, pTime[idx], clrRed, "L2_Bearish_Lock");
                   supState.pushState = INT_LOW;
                   resState.pushState = INT_NONE;
-                  supState.crossState = false;
+                  supState.crossState = INT_NULL;
                }
             }
          }
@@ -639,6 +681,140 @@ int OnCalculate(const int rates_total,
       if(time[i] >= targetDayStart) {
          ProcessLevel(i, L1_PERIOD, L1_BACKSTEP, stateL1.firstBarOfDay, open, high, low, close, time, stateL1, BufferL1H, BufferL1L, false);
          ProcessLevel(i, L2_PERIOD, L2_BACKSTEP, stateL2.firstBarOfDay, open, high, low, close, time, stateL2, BufferL2H, BufferL2L, true);
+         
+         CopyBuffer(handle_lesserRSI, 0, i - 1, 2, lesserRSI);
+         CopyBuffer(handle_greaterRSI, 0, i, 1, greaterRSI);
+         CopyBuffer(handle_Mama_Fama, 0, i, 1, Fama);
+         CopyBuffer(handle_Mama_Fama, 2, i, 1, Mama);
+         
+         double Father = Fama[0];
+         double Mother = Mama[0];
+         
+         double higherFM = NormalizeDouble(MathMax(Father, Mother), 2);
+         double lowerFM = NormalizeDouble(MathMin(Father, Mother), 2);
+         
+         bool isBullishCandle = (close[i] > open[i]);
+         bool isBearishCandle = (close[i] < open[i]);
+         
+         // cross
+         if(resState.pushState == INT_HIGH) {
+            
+            if(isBullishCandle && resState.crossState != INT_NULL && resState.bufferCrossCount < 3) {
+               
+               resState.bufferDelayCount++;
+               bool validCounterCross = false;
+               
+               if(resState.crossState == INT_30) {
+                  if(lesserRSI[0] < 30 && lesserRSI[1] > 30) validCounterCross = true;
+               } else if(resState.crossState == INT_40) {
+                  if(lesserRSI[0] < 40 && lesserRSI[1] > 40) validCounterCross = true;
+               } else if(resState.crossState == INT_50) {
+                  if(lesserRSI[0] < 50 && lesserRSI[1] > 50) validCounterCross = true;
+               } else if(resState.crossState == INT_60) {
+                  if(lesserRSI[0] < 60 && lesserRSI[1] > 60) validCounterCross = true;
+               } else if(resState.crossState == INT_70) {
+                  if(lesserRSI[0] < 70 && lesserRSI[1] > 70) validCounterCross = true;
+               }
+                                
+               if(validCounterCross) {
+                  resState.bufferDelayCount = 0;
+                  resState.crossState = INT_NULL;
+                  if(high[i] < higherFM && greaterRSI[0] > 50) BufferBullishEvent[i] = low[i];
+               }
+            }
+            
+            if(isBearishCandle && high[i] > higherFM && resState.bufferDelayCount < 1) {
+               BufferBullishEvent[i] = low[i];
+               if(lesserRSI[0] > 30 && lesserRSI[1] < 30) {
+                  resState.bufferCrossCount = 0;
+                  resState.bufferDelayCount = 0;
+                  resState.crossState = INT_30;
+               }
+               else if(lesserRSI[0] > 40 && lesserRSI[1] < 40) {
+                  resState.bufferCrossCount = 0;
+                  resState.bufferDelayCount = 0;
+                  resState.crossState = INT_40;
+               }
+               else if(lesserRSI[0] > 50 && lesserRSI[1] < 50) {
+                  resState.bufferCrossCount = 0;
+                  resState.bufferDelayCount = 0;
+                  resState.crossState = INT_50;
+               }
+               else if(lesserRSI[0] > 60 && lesserRSI[1] < 60) {
+                  resState.bufferCrossCount = 0;
+                  resState.bufferDelayCount = 0;
+                  resState.crossState = INT_60;
+               }
+               else if(lesserRSI[0] > 70 && lesserRSI[1] < 70) {
+                  resState.bufferCrossCount = 0;
+                  resState.bufferDelayCount = 0;
+                  resState.crossState = INT_70;
+               }
+               
+               if(resState.crossState != INT_NULL) resState.bufferCrossCount++; // cross buffer tally
+               
+               if(resState.crossState != INT_NULL && resState.bufferCrossCount > 2) resState.crossState = INT_NULL; // MAX cross buffer evaluation
+            } else if(isBearishCandle && resState.crossState != INT_NULL && (resState.bufferDelayCount > 0 || high[i] >= higherFM)) resState.crossState = INT_NULL;
+         }
+         
+         if(supState.pushState == INT_LOW) {
+            
+            if(isBearishCandle && supState.crossState != INT_NULL && supState.bufferCrossCount < 3) {
+               supState.bufferDelayCount++;
+               bool validCounterCross = false;
+               
+               if(supState.crossState == INT_70) {
+                  if(lesserRSI[0] < 70 && lesserRSI[1] > 70) validCounterCross = true;
+               } else if(supState.crossState == INT_60) {
+                  if(lesserRSI[0] < 60 && lesserRSI[1] > 60) validCounterCross = true;
+               } else if(supState.crossState == INT_50) {
+                  if(lesserRSI[0] < 50 && lesserRSI[1] > 50) validCounterCross = true;
+               } else if(supState.crossState == INT_40) {
+                  if(lesserRSI[0] < 40 && lesserRSI[1] > 40) validCounterCross = true;
+               } else if(supState.crossState == INT_30) {
+                  if(lesserRSI[0] < 30 && lesserRSI[1] > 30) validCounterCross = true;
+               }
+               
+               if(validCounterCross) {
+                  supState.bufferDelayCount = 0;
+                  supState.crossState = INT_NULL;
+                  if(low[i] > lowerFM && greaterRSI[0] < 50) BufferBearishEvent[i] = high[i];
+               }
+            }
+            
+            if(isBullishCandle && low[i] > lowerFM && supState.bufferDelayCount == 0) {
+            
+               if(lesserRSI[0] < 70 && lesserRSI[1] > 70) {
+                  supState.bufferCrossCount = 0;
+                  supState.bufferDelayCount = 0;
+                  supState.crossState = INT_70;
+               }
+               else if(lesserRSI[0] < 60 && lesserRSI[1] > 60) {
+                  supState.bufferCrossCount = 0;
+                  supState.bufferDelayCount = 0;
+                  supState.crossState = INT_60;
+               }
+               else if(lesserRSI[0] < 50 && lesserRSI[1] > 50) {
+                  supState.bufferCrossCount = 0;
+                  supState.bufferDelayCount = 0;
+                  supState.crossState = INT_50;
+               }
+               else if(lesserRSI[0] < 40 && lesserRSI[1] > 40) {
+                  supState.bufferCrossCount = 0;
+                  supState.bufferDelayCount = 0;
+                  supState.crossState = INT_40;
+               }
+               else if(lesserRSI[0] < 30 && lesserRSI[1] > 30) {
+                  supState.bufferCrossCount = 0;
+                  supState.bufferDelayCount = 0;
+                  supState.crossState = INT_30;
+               }
+               
+               if(supState.crossState != INT_NULL) supState.bufferCrossCount++;
+               
+               if(supState.crossState != INT_NULL && supState.bufferCrossCount > 2) supState.crossState = INT_NULL;
+            } else if(isBullishCandle && supState.crossState != INT_NULL && (supState.bufferDelayCount > 0 || low[i] >= lowerFM)) supState.crossState = INT_NULL;
+         }
       }
       
    } // limits
@@ -646,3 +822,6 @@ int OnCalculate(const int rates_total,
    return(rates_total);
 }
 //+------------------------------------------------------------------+
+
+
+
