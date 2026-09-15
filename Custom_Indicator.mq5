@@ -3,12 +3,12 @@
 //|                                  Copyright 2024, Software Agency |
 //|                                       Optimized for BTCUSD M1    |
 //+------------------------------------------------------------------+
-#property copyright "Copyright 2024"
+#property copyright "Copyright 2026"
 #property link      ""
-#property version   "1.21"
+#property version   "1.00"
 #property indicator_chart_window
-#property indicator_buffers 10
-#property indicator_plots   10
+#property indicator_buffers 6
+#property indicator_plots   6
 
 #property indicator_label1 "Upper Line"
 #property indicator_type1 DRAW_LINE
@@ -20,69 +20,57 @@
 #property indicator_color2 clrRed
 #property indicator_width2 2
 
-#property indicator_label3 "Resistance Line"
-#property indicator_type3 DRAW_LINE
-#property indicator_color3 clrGreen
+//--- plot Semafor High
+#property indicator_label3 "Level 2 High"
+#property indicator_type3  DRAW_ARROW
+#property indicator_color3 clrMagenta
 #property indicator_width3 1
-
-#property indicator_label4 "Support Line"
-#property indicator_type4 DRAW_LINE
-#property indicator_color4 clrRed
+//--- plot Semafor Low
+#property indicator_label4 "Level 2 Low"
+#property indicator_type4  DRAW_ARROW
+#property indicator_color4 clrAqua
 #property indicator_width4 1
 
-//--- plot Level 1 High
-#property indicator_label5  "Level 1 High"
-#property indicator_type5   DRAW_ARROW
-#property indicator_color5  clrMagenta
-#property indicator_width5  1
-//--- plot Level 1 Low
-#property indicator_label6  "Level 1 Low"
-#property indicator_type6   DRAW_ARROW
-#property indicator_color6  clrAqua
-#property indicator_width6  1
-//--- plot Level 2 High
-#property indicator_label7 "Level 2 High"
-#property indicator_type7  DRAW_ARROW
-#property indicator_color7 clrMagenta
-#property indicator_width7 1
-//--- plot Level 2 Low
-#property indicator_label8 "Level 2 Low"
-#property indicator_type8  DRAW_ARROW
-#property indicator_color8 clrAqua
-#property indicator_width8 1
-
 //--- plot BullBorder Events
-#property indicator_label9 "Bullish Event"
-#property indicator_type9  DRAW_ARROW
-#property indicator_color9 clrLime
-#property indicator_width9 1
+#property indicator_label5 "Bullish Event"
+#property indicator_type5  DRAW_ARROW
+#property indicator_color5 clrLime
+#property indicator_width5 1
 //--- plot BearBorder Events
-#property indicator_label10 "Bearish Event"
-#property indicator_type10  DRAW_ARROW
-#property indicator_color10 clrYellow
-#property indicator_width10 1
+#property indicator_label6 "Bearish Event"
+#property indicator_type6  DRAW_ARROW
+#property indicator_color6 clrYellow
+#property indicator_width6 1
 
 //--- input parameters
 input datetime InpHistoricalDate = 0;   // Historical Date (YYYY.MM.DD) - 0 for Current Day
 
+//--- Indicator inputs
+input int    InpKPeriod = 100;
+input double InpLevel1  = 100.0;
+input double InpLevel2  = 75.0;
+input double InpLevel3  = 50.0;
+input double InpLevel4  = 25.0;
+input double InpLevel5  = 0.0;
+
 //--- indicator buffers
 double         BufferUp[];
 double         BufferDown[];
-double         BufferResistance[];
-double         BufferSupport[];
 
-double         BufferL1H[];
-double         BufferL1L[];
-double         BufferL2H[];
-double         BufferL2L[];
+double         BufferH[];
+double         BufferL[];
 double         BufferBullishEvent[];
 double         BufferBearishEvent[];
 
-//--- Level Settings (Hardcoded as per requirements)
-const int L1_PERIOD = 3;
-const int L1_BACKSTEP = 3;
-const int L1_ARROW = 159;
+double upper[2];
+double resistance[2];
+double mid[2];
+double support[2];
+double lower[2];
 
+int stoch_bands_handle = INVALID_HANDLE;
+
+//--- Level Settings (Hardcoded as per requirements)
 const int L2_PERIOD = 13;
 const int L2_BACKSTEP = 5;
 const int L2_ARROW = 108;
@@ -101,12 +89,17 @@ enum EInteractionType {
    INT_LOW
 };
 
+enum ECrossType {
+   INT_NULL,
+   INT_RES,
+   INT_MID,
+   INT_SUP
+};
+
 struct BorderState { // Tracks internal border
-   bool crossState;
+   ECrossType       crossState;
    EInteractionType pushState;
-   int retLevel;
-   int bufferCrossCount;
-   int bufferDelayCount;
+   int              bufferCrossCount;
 };
 
 struct LevelState { // Tracks level 2 high/low (level 1 is a minor consequence)
@@ -119,11 +112,8 @@ struct LevelState { // Tracks level 2 high/low (level 1 is a minor consequence)
    bool          bearishLock;
 };
 
-LevelState stateL1;
 LevelState stateL2;
 
-BorderState resStateL1;
-BorderState supStateL1;
 BorderState resStateL2;
 BorderState supStateL2;
 
@@ -143,31 +133,21 @@ int OnInit()
    ArraySetAsSeries(BufferUp, false);
    SetIndexBuffer(1, BufferDown, INDICATOR_DATA);
    ArraySetAsSeries(BufferDown, false);
-   SetIndexBuffer(2, BufferResistance, INDICATOR_DATA);
-   ArraySetAsSeries(BufferResistance, false);
-   SetIndexBuffer(3, BufferSupport, INDICATOR_DATA);
-   ArraySetAsSeries(BufferSupport, false);
    
-   SetIndexBuffer(4, BufferL1H, INDICATOR_DATA);
-   ArraySetAsSeries(BufferL1H, false);
-   SetIndexBuffer(5, BufferL1L, INDICATOR_DATA);
-   ArraySetAsSeries(BufferL1L, false);
-   SetIndexBuffer(6, BufferL2H, INDICATOR_DATA);
-   ArraySetAsSeries(BufferL2H, false);
-   SetIndexBuffer(7, BufferL2L, INDICATOR_DATA);
-   ArraySetAsSeries(BufferL2L, false);
-   SetIndexBuffer(8, BufferBullishEvent, INDICATOR_DATA);
+   SetIndexBuffer(2, BufferH, INDICATOR_DATA);
+   ArraySetAsSeries(BufferH, false);
+   SetIndexBuffer(3, BufferL, INDICATOR_DATA);
+   ArraySetAsSeries(BufferL, false);
+   SetIndexBuffer(4, BufferBullishEvent, INDICATOR_DATA);
    ArraySetAsSeries(BufferBullishEvent, false);
-   SetIndexBuffer(9, BufferBearishEvent, INDICATOR_DATA);
+   SetIndexBuffer(5, BufferBearishEvent, INDICATOR_DATA);
    ArraySetAsSeries(BufferBearishEvent, false);
 
    //--- set arrow codes for Level 1 and Level 2
-   PlotIndexSetInteger(4, PLOT_ARROW, L1_ARROW);
-   PlotIndexSetInteger(5, PLOT_ARROW, L1_ARROW);
-   PlotIndexSetInteger(6, PLOT_ARROW, L2_ARROW);
-   PlotIndexSetInteger(7, PLOT_ARROW, L2_ARROW);
-   PlotIndexSetInteger(8, PLOT_ARROW, 233); // Bullish event 217,225,233,241
-   PlotIndexSetInteger(9, PLOT_ARROW, 234); // Bearish event
+   PlotIndexSetInteger(2, PLOT_ARROW, L2_ARROW);
+   PlotIndexSetInteger(3, PLOT_ARROW, L2_ARROW);
+   PlotIndexSetInteger(4, PLOT_ARROW, 233); // Bullish event 217,225,233,241
+   PlotIndexSetInteger(5, PLOT_ARROW, 234); // Bearish event
 
    //--- set empty values
    for(int i=0; i<4; i++) {
@@ -185,17 +165,37 @@ int OnInit()
       Print("Note: This indicator is optimized for BTCUSD M1.");
    }
 
+   stoch_bands_handle = iCustom(
+      _Symbol,
+      PERIOD_CURRENT,
+      "Custom\\Stochastic bands",
+      InpKPeriod,
+      InpLevel1,
+      InpLevel2,
+      InpLevel3,
+      InpLevel4,
+      InpLevel5
+   );
+   
    //--- initialize state
-   ResetLevelState(stateL1);
    ResetLevelState(stateL2);
    
-   ResetBorderState(resStateL1);
-   ResetBorderState(supStateL1);
    ResetBorderState(resStateL2);
    ResetBorderState(supStateL2);
    
    targetDayStart = 0;
    targetDayEnd = 0;
+   
+   //--- Check whether the handle was created
+   if(stoch_bands_handle == INVALID_HANDLE)
+   {
+      PrintFormat(
+         "Failed to create Stochastic bands handle. Error: %d",
+         GetLastError()
+      );
+
+      return INIT_FAILED;
+   }
    
    return(INIT_SUCCEEDED);
 }
@@ -206,7 +206,13 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    ObjectsDeleteAll(0, "L2_");
-   ObjectsDeleteAll(0, "L1_");
+   ObjectsDeleteAll(0, "H2_");
+   
+   if(stoch_bands_handle != INVALID_HANDLE)
+   {
+      IndicatorRelease(stoch_bands_handle);
+      stoch_bands_handle = INVALID_HANDLE;
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -215,9 +221,20 @@ void OnDeinit(const int reason)
 void ResetBorderState(BorderState &bs) {
    bs.crossState = false;
    bs.pushState = INT_NONE;
-   bs.retLevel = 0;
    bs.bufferCrossCount = 0;
-   bs.bufferDelayCount = 0;
+}
+
+//+------------------------------------------------------------------+
+//| Helper functions for candle classification                      |
+//+------------------------------------------------------------------+
+bool IsBullishCandle(const double &o[], const double &c[], int idx) {
+//bool IsBullishCandle(int idx) {
+   return c[idx] > o[idx];
+}
+
+bool IsBearishCandle(const double &o[], const double &c[], int idx) {
+//bool IsBearishCandle(int idx) {
+   return c[idx] < o[idx];
 }
 
 void ResetLevelState(LevelState &state) {
@@ -239,13 +256,73 @@ void ResetLevelState(LevelState &state) {
 }
 
 void DeleteConnector(int id, bool isHigh, string levelPrefix) {
-   string prefix = isHigh ? "H_" : "L_";
+   string prefix = "HL"; // isHigh ? "H_" : "L_";
 
    string lineName = levelPrefix + "_ZZ_Line_" + prefix + IntegerToString(id);
    string textName = levelPrefix + "_ZZ_Text_" + prefix + IntegerToString(id);
 
    ObjectDelete(0, lineName);
    ObjectDelete(0, textName);
+}
+
+void GetBands()
+{
+   const int count = 2;
+
+   // CopyBuffer() places the oldest copied item at the beginning of physical memory
+   int upper_count = CopyBuffer(
+      stoch_bands_handle,
+      0,
+      1,
+      count,
+      upper
+   );
+
+   int resistance_count = CopyBuffer(
+      stoch_bands_handle,
+      1,
+      1,
+      count,
+      resistance
+   );
+
+   int mid_count = CopyBuffer(
+      stoch_bands_handle,
+      2,
+      1,
+      count,
+      mid
+   );
+
+   int support_count = CopyBuffer(
+      stoch_bands_handle,
+      3,
+      1,
+      count,
+      support
+   );
+
+   int lower_count = CopyBuffer(
+      stoch_bands_handle,
+      4,
+      1,
+      count,
+      lower
+   );
+
+   if(upper_count != count ||
+      resistance_count != count ||
+      mid_count != count ||
+      support_count != count ||
+      lower_count != count)
+   {
+      PrintFormat(
+         "Not enough band data. Error: %d",
+         GetLastError()
+      );
+
+      return;
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -315,10 +392,10 @@ void DrawZigzagLines(const SemaforAnchor &start_v, const SemaforAnchor &end_v, b
    datetime midTime = (datetime)(start_v.time + (end_v.time - start_v.time) / 2);
    double midPrice = start_v.price + (end_v.price - start_v.price) / 2.0;
 
-   string prefix = isHigh ? "H_" : "L_";
+   string prefix = "HL"; // isHigh ? "H_" : "L_";
    
-   string lineName = levelPrefix + "_ZZ_Line_" + prefix + IntegerToString(end_v.id);
-   string textName = levelPrefix + "_ZZ_Text_" + prefix + IntegerToString(end_v.id);
+   string lineName = levelPrefix + "_ZZ_Line_" + prefix + IntegerToString(start_v.id);
+   string textName = levelPrefix + "_ZZ_Text_" + prefix + IntegerToString(start_v.id);
 
    UpdateTrendLine(lineName, start_v.time, start_v.price, end_v.time, end_v.price, lineClr, textStr);
    //UpdateTextLabel(textName, midTime, midPrice, textStr);
@@ -339,213 +416,7 @@ void DrawLockLine(int barIndex, datetime t, color clr, string prefix, ENUM_LINE_
 }
 
 //+------------------------------------------------------------------+
-//| Process level1 semafors for a specific candle index           |
-//+------------------------------------------------------------------+
-void ProcessLevelL1(int idx, int period, int backstep, int firstBar, const double &pOpen[], const double &pHigh[], const double &pLow[], const double &pClose[], const datetime &pTime[], LevelState &state, BorderState &resState, BorderState &supState, double &bufH[], double &bufL[]) {
-   // Bootstrap: first candle of the day becomes both high and low anchors
-   if(idx == firstBar)
-   {
-      int window_start = firstBar - period + 1;
-      
-      int hh_idx = ArrayMaximum(pHigh, window_start, period);
-      int ll_idx = ArrayMinimum(pLow,  window_start, period);
-      
-      state.highCounter++;
-      state.highAnchors[1].barIndex = idx;
-      state.highAnchors[1].price    = pHigh[hh_idx];
-      state.highAnchors[1].time     = pTime[idx];
-      state.highAnchors[1].id       = state.highCounter;
-      bufH[idx] = pHigh[hh_idx];
-
-      state.lowCounter++;
-      state.lowAnchors[1].barIndex = idx;
-      state.lowAnchors[1].price    = pLow[ll_idx];
-      state.lowAnchors[1].time     = pTime[idx];
-      state.lowAnchors[1].id       = state.lowCounter;
-      bufL[idx] = pLow[ll_idx];
-      
-
-      if(bufH[idx] > 0) BufferResistance[idx] = pHigh[hh_idx];
-      else if(BufferResistance[idx - 1] > 0) BufferResistance[idx] = BufferResistance[idx - 1];
-   
-      if(bufL[idx] > 0) BufferSupport[idx] = pLow[ll_idx];
-      else if(BufferSupport[idx - 1] > 0) BufferSupport[idx] = BufferSupport[idx - 1];
-      
-      return;
-   }
-   
-   // Warm-up phase: allow only anchor evolution
-   if(idx - firstBar < period - 1)
-   {
-      // High evolves
-      if(pHigh[idx] > state.highAnchors[1].price)
-      {
-          bufH[state.highAnchors[1].barIndex] = 0;
-
-          state.highAnchors[1].barIndex = idx;
-          state.highAnchors[1].price    = pHigh[idx];
-          state.highAnchors[1].time     = pTime[idx];
-
-          bufH[idx] = pHigh[idx];
-          state.bullishLock = true;
-          
-          DrawZigzagLines(state.lowAnchors[1], state.highAnchors[1], true, "L1"); // HH
-      }
-
-      // Low evolves
-      if(pLow[idx] < state.lowAnchors[1].price)
-      {
-          bufL[state.lowAnchors[1].barIndex] = 0;
-
-          state.lowAnchors[1].barIndex = idx;
-          state.lowAnchors[1].price    = pLow[idx];
-          state.lowAnchors[1].time     = pTime[idx];
-
-          bufL[idx] = pLow[idx];
-          state.bearishLock = true;
-          
-          DrawZigzagLines(state.highAnchors[1], state.lowAnchors[1], false, "L1"); // LL
-      }
-       
-      if(bufH[idx] > 0) BufferResistance[idx] = pHigh[idx];
-      else if(BufferResistance[idx - 1] > 0) BufferResistance[idx] = BufferResistance[idx - 1];
-   
-      if(bufL[idx] > 0) BufferSupport[idx] = pLow[idx];
-      else if(BufferSupport[idx - 1] > 0) BufferSupport[idx] = BufferSupport[idx - 1];
-
-       return;
-   }
-   
-   double brkPercentage = 0.62;
-
-   // --- High Semafor ---
-   bool isHighSemafor = true;
-   for(int j = idx - 1; j > idx - period; j--) {
-      // Equal high does not qualify as higher high
-      if(pHigh[idx] < pHigh[j]) {
-         isHighSemafor = false;
-         break;
-      }
-   }
-
-   if(isHighSemafor) {
-      bool repainted = false;
-      // Check if we can repaint the most recent active anchor within Backstep range
-      int dist = idx - state.highAnchors[1].barIndex;
-      if(dist <= backstep && !(state.highAnchors[1].barIndex < state.lowAnchors[1].barIndex)) {
-         // Repaint: remove old visual and relocate to current extreme
-         bufH[state.highAnchors[1].barIndex] = 0;
-         state.highAnchors[1].barIndex = idx;
-         state.highAnchors[1].price = pHigh[idx];
-         state.highAnchors[1].time = pTime[idx];
-         bufH[idx] = pHigh[idx];
-         repainted = true;
-         
-         DrawZigzagLines(state.lowAnchors[1], state.highAnchors[1], true, "L1"); // HH
-      }
-      
-      if(!repainted) {
-         // New anchor: push previous to secondary position and finalize current
-         if(!state.bullishLock) {
-            state.bullishLock = true;
-            state.bearishLock = false;
-            state.highAnchors[0] = state.highAnchors[1];
-         } else if(state.bullishLock) DeleteConnector(state.highAnchors[1].id, true, "L1");
-         state.highCounter++;
-         state.highAnchors[1].barIndex = idx;
-         state.highAnchors[1].price = pHigh[idx];
-         state.highAnchors[1].time = pTime[idx];
-         state.highAnchors[1].id = state.highCounter;
-         bufH[idx] = pHigh[idx];
-         
-         DrawZigzagLines(state.lowAnchors[1], state.highAnchors[1], true, "L1"); // HH
-      }
-      
-      // trend set
-      if(state.highAnchors[0].price > 0) {
-         double prevLegHigh = state.highAnchors[0].price - state.lowAnchors[1].price;
-         double currLegHigh = state.highAnchors[1].price - state.lowAnchors[1].price;
-         
-         if(NormalizeDouble(currLegHigh / prevLegHigh, 2) > brkPercentage) {
-            if(pHigh[idx] >= (state.lowAnchors[1].price + NormalizeDouble(prevLegHigh * brkPercentage, 2))) {
-               if(resState.pushState == INT_NONE) DrawLockLine(idx, pTime[idx], clrLime, "L1_Bullish_Lock", STYLE_DOT);
-               resState.pushState = INT_HIGH;
-               supState.pushState = INT_NONE;
-               resState.crossState = false;
-            }
-         }
-      }
-   }
-
-   // --- Low Semafor ---
-   bool isLowSemafor = true;
-   for(int j = idx - 1; j > idx - period; j--) {
-      // Equal low does not qualify as lower low
-      if(pLow[idx] > pLow[j]) {
-         isLowSemafor = false;
-         break;
-      }
-   }
-
-   if(isLowSemafor) {
-      bool repainted = false;
-      // Check if we can repaint the most recent active anchor within Backstep range
-      int dist = idx - state.lowAnchors[1].barIndex;
-      if(dist <= backstep && !(state.lowAnchors[1].barIndex < state.highAnchors[1].barIndex)) {
-         // Repaint: remove old visual and relocate to current extreme
-         bufL[state.lowAnchors[1].barIndex] = 0;
-         state.lowAnchors[1].barIndex = idx;
-         state.lowAnchors[1].price = pLow[idx];
-         state.lowAnchors[1].time = pTime[idx];
-         bufL[idx] = pLow[idx];
-         repainted = true;
-         
-         DrawZigzagLines(state.highAnchors[1], state.lowAnchors[1], false, "L1"); // LL
-      }
-      
-      if(!repainted) {
-         // New anchor: push previous to secondary position and finalize current
-         if(!state.bearishLock) {
-            state.bearishLock = true;
-            state.bullishLock = false;
-            state.lowAnchors[0] = state.lowAnchors[1];
-         } else if(state.bearishLock) DeleteConnector(state.lowAnchors[1].id, false, "L1");
-         state.lowCounter++;
-         state.lowAnchors[1].barIndex = idx;
-         state.lowAnchors[1].price = pLow[idx];
-         state.lowAnchors[1].time = pTime[idx];
-         state.lowAnchors[1].id = state.lowCounter;
-         bufL[idx] = pLow[idx];
-         
-         DrawZigzagLines(state.highAnchors[1], state.lowAnchors[1], false, "L1"); // LL
-      }
-      
-      // trend set
-      if(state.lowAnchors[0].price > 0) {
-         double prevLegLow = state.highAnchors[1].price - state.lowAnchors[0].price;
-         double currLegLow = state.highAnchors[1].price - state.lowAnchors[1].price;
-         
-         if(NormalizeDouble(currLegLow / prevLegLow, 2) > brkPercentage) {
-            if(pLow[idx] <= (state.highAnchors[1].price - NormalizeDouble(prevLegLow * brkPercentage, 2))) {
-               if(supState.pushState == INT_NONE) DrawLockLine(idx, pTime[idx], clrRed, "L1_Bearish_Lock", STYLE_DOT);
-               supState.pushState = INT_LOW;
-               resState.pushState = INT_NONE;
-               supState.crossState = false;
-            }
-         }
-      }
-   }
-   
-   // external envelopes
-   if(bufH[idx] > 0) BufferResistance[idx] = pHigh[idx];
-   else if(BufferResistance[idx - 1] > 0) BufferResistance[idx] = BufferResistance[idx - 1];
-   
-   if(bufL[idx] > 0) BufferSupport[idx] = pLow[idx];
-   else if(BufferSupport[idx - 1] > 0) BufferSupport[idx] = BufferSupport[idx - 1];
-}
-
-//+------------------------------------------------------------------+
-//| Process level2 semafors for a specific candle index           |
+//| Process level2 semafors for a specific candle index              |
 //+------------------------------------------------------------------+
 void ProcessLevelL2(int idx, int period, int backstep, int firstBar, const double &pOpen[], const double &pHigh[], const double &pLow[], const double &pClose[], const datetime &pTime[], LevelState &state, BorderState &resState, BorderState &supState, double &bufH[], double &bufL[]) {
    // Bootstrap: first candle of the day becomes both high and low anchors
@@ -557,7 +428,7 @@ void ProcessLevelL2(int idx, int period, int backstep, int firstBar, const doubl
       int ll_idx = ArrayMinimum(pLow,  window_start, period);
       
       state.highCounter++;
-      state.highAnchors[1].barIndex = idx;
+      state.highAnchors[i].barIndex = idx;
       state.highAnchors[1].price    = pHigh[hh_idx];
       state.highAnchors[1].time     = pTime[idx];
       state.highAnchors[1].id       = state.highCounter;
@@ -586,6 +457,22 @@ void ProcessLevelL2(int idx, int period, int backstep, int firstBar, const doubl
       // High evolves
       if(pHigh[idx] > state.highAnchors[1].price)
       {
+          // If this is the first move beyond the bootstrap high,
+         // preserve the bootstrap anchor in [0].
+         if(state.highAnchors[0].price <= 0)
+         {
+            state.highAnchors[0] = state.highAnchors[1];
+
+            if(resState.pushState == INT_NONE)
+            {
+               DrawLockLine(idx, pTime[idx], clrLime, "L2_Bullish_Lock", STYLE_SOLID);
+               resState.pushState = INT_HIGH;
+               ResetBorderState(supState);
+               resState.crossState = false;
+               resState.bufferCrossCount = 0;
+            }
+         }
+          
           bufH[state.highAnchors[1].barIndex] = 0;
 
           state.highAnchors[1].barIndex = idx;
@@ -595,12 +482,31 @@ void ProcessLevelL2(int idx, int period, int backstep, int firstBar, const doubl
           bufH[idx] = pHigh[idx];
           state.bullishLock = true;
           
-          DrawZigzagLines(state.lowAnchors[1], state.highAnchors[1], true, "L2"); // HH
+          //DrawZigzagLines(state.lowAnchors[1], state.highAnchors[1], true, "L2"); // HH
+          if(state.highAnchors[0].price > 0) {
+            if(state.highAnchors[1].price > state.highAnchors[0].price) DrawZigzagLines(state.highAnchors[0], state.highAnchors[1], true, "H2"); // HH
+            else if(state.highAnchors[1].price < state.highAnchors[0].price) DrawZigzagLines(state.highAnchors[0], state.highAnchors[1], false, "H2"); // LH
+         }
       }
 
       // Low evolves
       if(pLow[idx] < state.lowAnchors[1].price)
       {
+          // Preserve the original bootstrap low in [0].
+         if(state.lowAnchors[0].price <= 0)
+         {
+            state.lowAnchors[0] = state.lowAnchors[1];
+            
+            if(supState.pushState == INT_NONE)
+            {
+               DrawLockLine(idx, pTime[idx], clrRed, "L2_Bearish_Lock", STYLE_SOLID);
+               supState.pushState = INT_LOW;
+               ResetBorderState(resState);
+               supState.crossState = false;
+               supState.bufferCrossCount = 0;
+            }
+         }
+          
           bufL[state.lowAnchors[1].barIndex] = 0;
 
           state.lowAnchors[1].barIndex = idx;
@@ -610,7 +516,11 @@ void ProcessLevelL2(int idx, int period, int backstep, int firstBar, const doubl
           bufL[idx] = pLow[idx];
           state.bearishLock = true;
           
-          DrawZigzagLines(state.highAnchors[1], state.lowAnchors[1], false, "L2"); // LL
+          //DrawZigzagLines(state.highAnchors[1], state.lowAnchors[1], false, "L2"); // LL
+          if(state.lowAnchors[0].price > 0) {
+            if(state.lowAnchors[1].price < state.lowAnchors[0].price) DrawZigzagLines(state.lowAnchors[0], state.lowAnchors[1], false, "L2"); // LL
+            else if(state.lowAnchors[1].price > state.lowAnchors[0].price) DrawZigzagLines(state.lowAnchors[0], state.lowAnchors[1], true, "L2"); // HL
+         }
       }
        
       if(bufH[idx] > 0) BufferUp[idx] = pHigh[idx];
@@ -622,7 +532,7 @@ void ProcessLevelL2(int idx, int period, int backstep, int firstBar, const doubl
       return;
    }
    
-   double brkPercentage = 0.72;
+   double brkPercentage = 1;
 
    // --- High Semafor ---
    bool isHighSemafor = true;
@@ -638,7 +548,7 @@ void ProcessLevelL2(int idx, int period, int backstep, int firstBar, const doubl
       bool repainted = false;
       // Check if we can repaint the most recent active anchor within Backstep range
       int dist = idx - state.highAnchors[1].barIndex;
-      if(dist <= backstep && !(state.highAnchors[1].barIndex < state.lowAnchors[1].barIndex)) {
+      if(dist <= backstep) {
          // Repaint: remove old visual and relocate to current extreme
          bufH[state.highAnchors[1].barIndex] = 0;
          state.highAnchors[1].barIndex = idx;
@@ -647,7 +557,11 @@ void ProcessLevelL2(int idx, int period, int backstep, int firstBar, const doubl
          bufH[idx] = pHigh[idx];
          repainted = true;
          
-         DrawZigzagLines(state.lowAnchors[1], state.highAnchors[1], true, "L2"); // HH
+         //DrawZigzagLines(state.lowAnchors[1], state.highAnchors[1], true, "L2"); // HH
+         if(state.highAnchors[0].price > 0) {
+            if(state.highAnchors[1].price > state.highAnchors[0].price) DrawZigzagLines(state.highAnchors[0], state.highAnchors[1], true, "H2"); // HH
+            else if(state.highAnchors[1].price < state.highAnchors[0].price) DrawZigzagLines(state.highAnchors[0], state.highAnchors[1], false, "H2"); // LH
+         }
       }
       
       if(!repainted) {
@@ -656,7 +570,7 @@ void ProcessLevelL2(int idx, int period, int backstep, int firstBar, const doubl
             state.bullishLock = true;
             state.bearishLock = false;
             state.highAnchors[0] = state.highAnchors[1];
-         } else if(state.bullishLock) DeleteConnector(state.highAnchors[1].id, true, "L2");
+         } else if(state.bullishLock) DeleteConnector(state.highAnchors[0].id, true, "H2");
          state.highCounter++;
          state.highAnchors[1].barIndex = idx;
          state.highAnchors[1].price = pHigh[idx];
@@ -664,7 +578,11 @@ void ProcessLevelL2(int idx, int period, int backstep, int firstBar, const doubl
          state.highAnchors[1].id = state.highCounter;
          bufH[idx] = pHigh[idx];
          
-         DrawZigzagLines(state.lowAnchors[1], state.highAnchors[1], true, "L2"); // HH
+         //DrawZigzagLines(state.lowAnchors[1], state.highAnchors[1], true, "L2"); // HH
+         if(state.highAnchors[0].price > 0) {
+            if(state.highAnchors[1].price > state.highAnchors[0].price) DrawZigzagLines(state.highAnchors[0], state.highAnchors[1], true, "H2"); // HH
+            else if(state.highAnchors[1].price < state.highAnchors[0].price) DrawZigzagLines(state.highAnchors[0], state.highAnchors[1], false, "H2"); // LH
+         }
       }
       
       // trend set
@@ -673,11 +591,14 @@ void ProcessLevelL2(int idx, int period, int backstep, int firstBar, const doubl
          double currLegHigh = state.highAnchors[1].price - state.lowAnchors[1].price;
          
          if(NormalizeDouble(currLegHigh / prevLegHigh, 2) > brkPercentage) {
-            if(pClose[idx] >= (state.lowAnchors[1].price + NormalizeDouble(prevLegHigh * brkPercentage, 2))) {
-               if(resState.pushState == INT_NONE) DrawLockLine(idx, pTime[idx], clrLime, "L2_Bullish_Lock", STYLE_SOLID);
-               resState.pushState = INT_HIGH;
-               supState.pushState = INT_NONE;
-               resState.crossState = false;
+            if(pHigh[idx] >= (state.lowAnchors[1].price + NormalizeDouble(prevLegHigh * brkPercentage, 2))) {
+               if(resState.pushState == INT_NONE) {
+                  DrawLockLine(idx, pTime[idx], clrLime, "L2_Bullish_Lock", STYLE_SOLID);
+                  resState.pushState = INT_HIGH;
+                  ResetBorderState(supState);
+                  resState.crossState = false;
+                  resState.bufferCrossCount = 0;
+               }
             }
          }
       }
@@ -697,7 +618,7 @@ void ProcessLevelL2(int idx, int period, int backstep, int firstBar, const doubl
       bool repainted = false;
       // Check if we can repaint the most recent active anchor within Backstep range
       int dist = idx - state.lowAnchors[1].barIndex;
-      if(dist <= backstep && !(state.lowAnchors[1].barIndex < state.highAnchors[1].barIndex)) {
+      if(dist <= backstep) {
          // Repaint: remove old visual and relocate to current extreme
          bufL[state.lowAnchors[1].barIndex] = 0;
          state.lowAnchors[1].barIndex = idx;
@@ -706,7 +627,11 @@ void ProcessLevelL2(int idx, int period, int backstep, int firstBar, const doubl
          bufL[idx] = pLow[idx];
          repainted = true;
          
-         DrawZigzagLines(state.highAnchors[1], state.lowAnchors[1], false, "L2"); // LL
+         //DrawZigzagLines(state.highAnchors[1], state.lowAnchors[1], false, "L2"); // LL
+         if(state.lowAnchors[0].price > 0) {
+            if(state.lowAnchors[1].price < state.lowAnchors[0].price) DrawZigzagLines(state.lowAnchors[0], state.lowAnchors[1], false, "L2"); // LL
+            else if(state.lowAnchors[1].price > state.lowAnchors[0].price) DrawZigzagLines(state.lowAnchors[0], state.lowAnchors[1], true, "L2"); // HL
+         }
       }
       
       if(!repainted) {
@@ -715,7 +640,7 @@ void ProcessLevelL2(int idx, int period, int backstep, int firstBar, const doubl
             state.bearishLock = true;
             state.bullishLock = false;
             state.lowAnchors[0] = state.lowAnchors[1];
-         } else if(state.bearishLock) DeleteConnector(state.lowAnchors[1].id, false, "L2");
+         } else if(state.bearishLock) DeleteConnector(state.lowAnchors[0].id, false, "L2");
          state.lowCounter++;
          state.lowAnchors[1].barIndex = idx;
          state.lowAnchors[1].price = pLow[idx];
@@ -723,7 +648,11 @@ void ProcessLevelL2(int idx, int period, int backstep, int firstBar, const doubl
          state.lowAnchors[1].id = state.lowCounter;
          bufL[idx] = pLow[idx];
          
-         DrawZigzagLines(state.highAnchors[1], state.lowAnchors[1], false, "L2"); // LL
+         //DrawZigzagLines(state.highAnchors[1], state.lowAnchors[1], false, "L2"); // LL
+         if(state.lowAnchors[0].price > 0) {
+            if(state.lowAnchors[1].price < state.lowAnchors[0].price) DrawZigzagLines(state.lowAnchors[0], state.lowAnchors[1], false, "L2"); // LL
+            else if(state.lowAnchors[1].price > state.lowAnchors[0].price) DrawZigzagLines(state.lowAnchors[0], state.lowAnchors[1], true, "L2"); // HL
+         }
       }
       
       // trend set
@@ -732,11 +661,14 @@ void ProcessLevelL2(int idx, int period, int backstep, int firstBar, const doubl
          double currLegLow = state.highAnchors[1].price - state.lowAnchors[1].price;
          
          if(NormalizeDouble(currLegLow / prevLegLow, 2) > brkPercentage) {
-            if(pClose[idx] <= (state.highAnchors[1].price - NormalizeDouble(prevLegLow * brkPercentage, 2))) {
-               if(supState.pushState == INT_NONE) DrawLockLine(idx, pTime[idx], clrRed, "L2_Bearish_Lock", STYLE_SOLID);
-               supState.pushState = INT_LOW;
-               resState.pushState = INT_NONE;
-               supState.crossState = false;
+            if(pLow[idx] <= (state.highAnchors[1].price - NormalizeDouble(prevLegLow * brkPercentage, 2))) {
+               if(supState.pushState == INT_NONE) {
+                  DrawLockLine(idx, pTime[idx], clrRed, "L2_Bearish_Lock", STYLE_SOLID);
+                  supState.pushState = INT_LOW;
+                  ResetBorderState(resState);
+                  supState.crossState = false;
+                  supState.bufferCrossCount = 0;
+               }
             }
          }
       }
@@ -764,17 +696,13 @@ int OnCalculate(const int rates_total,
                 const long &volume[],
                 const int &spread[])
 {
-   if(rates_total < MathMax(L1_PERIOD, L2_PERIOD)) return 0;
+   if(rates_total < L2_PERIOD) return 0;
 
    // Always ensure the currently forming candle is empty (closed candles only)
    BufferUp[rates_total - 1] = EMPTY_VALUE;
    BufferDown[rates_total - 1] = EMPTY_VALUE;
-   BufferResistance[rates_total - 1] = EMPTY_VALUE;
-   BufferSupport[rates_total - 1] = EMPTY_VALUE;
-   BufferL1H[rates_total - 1] = 0.0;
-   BufferL1L[rates_total - 1] = 0.0;
-   BufferL2H[rates_total - 1] = 0.0;
-   BufferL2L[rates_total - 1] = 0.0;
+   BufferH[rates_total - 1] = 0.0;
+   BufferL[rates_total - 1] = 0.0;
    BufferBullishEvent[rates_total - 1] = 0.0;
    BufferBearishEvent[rates_total - 1] = 0.0;
 
@@ -801,23 +729,15 @@ int OnCalculate(const int rates_total,
       // Clear all buffers for the entire range
       ArrayInitialize(BufferUp, EMPTY_VALUE);
       ArrayInitialize(BufferDown, EMPTY_VALUE);
-      ArrayInitialize(BufferResistance, EMPTY_VALUE);
-      ArrayInitialize(BufferSupport, EMPTY_VALUE);
-      ArrayInitialize(BufferL1H, 0.0);
-      ArrayInitialize(BufferL1L, 0.0);
-      ArrayInitialize(BufferL2H, 0.0);
-      ArrayInitialize(BufferL2L, 0.0);
+      ArrayInitialize(BufferH, 0.0);
+      ArrayInitialize(BufferL, 0.0);
       ArrayInitialize(BufferBullishEvent, 0.0);
       ArrayInitialize(BufferBearishEvent, 0.0);
       
       ObjectsDeleteAll(0, "L2_");
-      ObjectsDeleteAll(0, "L1_");
       
-      ResetLevelState(stateL1);
       ResetLevelState(stateL2);
       
-      ResetBorderState(resStateL1);
-      ResetBorderState(supStateL1);
       ResetBorderState(resStateL2);
       ResetBorderState(supStateL2);
       
@@ -825,7 +745,6 @@ int OnCalculate(const int rates_total,
       while(start_idx < rates_total && time[start_idx] < targetDayStart) {
          start_idx++;
       }
-      stateL1.firstBarOfDay = start_idx;
       stateL2.firstBarOfDay = start_idx;
 
    } else {
@@ -839,12 +758,11 @@ int OnCalculate(const int rates_total,
    }
 
    // Ensure firstBarOfDay is always valid
-   if(stateL1.firstBarOfDay < 0) {
+   if(stateL2.firstBarOfDay < 0) {
       int fb = 0;
       while(fb < rates_total && time[fb] < targetDayStart) {
          fb++;
       }
-      stateL1.firstBarOfDay = fb;
       stateL2.firstBarOfDay = fb;
    }
 
@@ -854,109 +772,168 @@ int OnCalculate(const int rates_total,
       if(time[i] >= targetDayEnd) break;
       
       if(time[i] >= targetDayStart) {
-         ProcessLevelL1(i, L1_PERIOD, L1_BACKSTEP, stateL1.firstBarOfDay, open, high, low, close, time, stateL1, resStateL1, supStateL1, BufferL1H, BufferL1L);
-         ProcessLevelL2(i, L2_PERIOD, L2_BACKSTEP, stateL2.firstBarOfDay, open, high, low, close, time, stateL2, resStateL2, supStateL2, BufferL2H, BufferL2L);
-         
-         bool isBullishCandle(int idx) {
-            return close[idx] > open[idx];
-         }
-         bool isBearishCandle(int idx) {
-            return close[i] < open[i];
-         }
-         
-         // counter-cross
-         if(resStateL2.pushState == INT_HIGH && resStateL1.pushState == INT_HIGH) {
-            if(high[i] < BufferUp[i]) {
-               if(resStateL1.greaterBuffer) {
-                  if(isBearishCandle(i)) {
-                     resStateL1.greaterBuffer.bufferDelayCount--;
-                     if(resStateL1.greaterBuffer.bufferDelayCount == 0) resStateL1.greaterBuffer = false;
-                  }
-                  else if(isBullishCandle(i)) resStateL1.greaterBuffer.bufferDelayCount = 3; // default is 3
-               }
-               else if(resStateL1.lesserBuffer) {
-                  if(isBearishCandle(i)) {
-                     resStateL1.lesserBuffer.bufferDelayCount--;
-                     if(resStateL1.lesserBuffer.bufferDelayCount == 0) resStateL1.lesserBuffer = false; // default
-                  }
-                  else if(isBullishCandle(i)) resStateL1.lesserBuffer.bufferDelayCount = 2; // default is 2
-               }
-               
-               if(!(resStateL1.greaterBuffer || resStateL1.lesserBuffer)) {
-                  if(isBearishCandle(i)) {
-                     resStateL1.bufferCrossCount++;
-                     resStateL1.crossState = true;
-                     resStateL1.retLevel = i;
-                  }
-                  else if(isBullishCandle(i)) {
-                     if(resStateL1.crossState && resStateL1.bufferCrossCount > 0 && close[i] > open[resStateL1.retLevel] && high[i] < BufferUp[i]) {
-                        BufferBullishEvent[i] = low[i];
-                        resStateL1.bufferCrossCount = 0;
-                        resStateL1.crossState = false;
-                     }
-                     if(!(low[i] <= BufferDown[i])) {
-                        resStateL1.bufferCrossCount = 0;
-                        resStateL1.crossState = false;
-                     }
-                  }
-               
-               }
-            }
-         }
-         else if(supStateL2.pushState == INT_LOW && supStateL1.pushState == INT_LOW) {
-            if(low[i] > BufferDown[i]) {
-               if(supStateL1.greaterBuffer) {
-                  if(isBullishCandle(i)) {
-                     supStateL1.greaterBuffer.bufferDelayCount--;
-                     if(supStateL1.greaterBuffer.bufferDelayCount == 0) supStateL1.greaterBuffer = false;
-                  }
-                  else if(isBearishCandle(i)) supStateL1.greaterBuffer.bufferDelayCount = 3; // default is 3
-               }
-               else if(supStateL1.lesserBuffer) {
-                  if(isBullishCandle(i)) {
-                     supStateL1.lesserBuffer.bufferDelayCount--;
-                     if(supStateL1.lesserBuffer.bufferDelayCount == 0) supStateL1.lesserBuffer = false;
-                  }
-                  else if(isBearishCandle(i)) supStateL1.lesserBuffer.bufferDelayCount = 2; // default is 2
-               }
-               
-               if(!(supStateL1.greaterBuffer || supStateL1.lesserBuffer)) {
-                  if(isBullishCandle(i)) {
-                     supStateL1.bufferCrossCount++;
-                     supStateL1.crossState = true;
-                     supStateL1.retLevel = i;
-                  }
-                  else if(isBearishCandle(i)) {
-                     if(supStateL1.crossState && supStateL1.bufferCrossCount > 0 && close[i] < open[supStateL1.retLevel] && low[i] > BufferDown[i]) {
-                        BufferBearishEvent[i] = high[i];
-                        supStateL1.bufferCrossCount = 0;
-                        supStateL1.crossState = false;
-                     }
-                     if(!(high[i] >= BufferUp[i])) {
-                        supStateL1.bufferCrossCount = 0;
-                        supStateL1.crossState = false;
-                     }
-                  }
-               
-               }
-            }
-         }
-         
-         // cross
-         if(resStateL2.pushState == INT_HIGH && resStateL1.pushState == INT_HIGH) {
-            if(high[i] >= BufferUp[i]) {
-               if(isBullishCandle(i)) {resStateL1.lesserBuffer = true; resStateL1.lesserBuffer.bufferDelayCount = 2;}
-               else if(isBearishCandle(i)) {resStateL1.greaterBuffer = true; resStateL1.greaterBuffer.bufferDelayCount = 3;}
-            }
-         }
-         else if(supStateL2.pushState == INT_LOW && supStateL1.pushState == INT_LOW) {
-            if(low[i] <= BufferDown[i]) {
-               if(isBullishCandle(i)) {supStateL1.greaterBuffer = true; supStateL1.greaterBuffer.bufferDelayCount = 3;}
-               else if(isBearishCandle(i)) {supStateL1.lesserBuffer = true; supStateL1.lesserBuffer.bufferDelayCount = 2;}
-            }
-         }
-
+         ProcessLevelL2(i, L2_PERIOD, L2_BACKSTEP, stateL2.firstBarOfDay, open, high, low, close, time, stateL2, resStateL2, supStateL2, BufferH, BufferL);
       }
+      
+      GetBands();
+      
+      // bullish
+		if(resStateL2.pushState == INT_HIGH)
+		{
+			// countercross
+			if(resStateL2.crossState == INT_RES)
+			{
+				if(open[i] < resistance[i] && close[i] > resistance[i]) // bullish cc
+				{
+					if(IsBearishCandle(open, close, i-1) && high[i-1] > resistance[i-1] && close[i-1] < resistance[i-1] && close[i] > open[i-1] && resStateL2.bufferCrossCount == 0) // bullish c/swipe
+					{
+						BufferBullishEvent[i] = low[i];
+					}
+					else resStateL2.bufferCrossCount++;
+				}
+				
+				if(resStateL2.bufferCrossCount > 0)
+				{
+					if(high[i] >= upper[i] || high[i] >= BufferUp[i] || low[i] <= BufferDown[i])
+					{
+						resStateL2.bufferCrossCount = 0;
+					}
+				}
+			}
+			
+			if(resStateL2.crossState == INT_MID)
+			{
+				if(open[i] < mid[1] && close[i] > mid[1]) // bullish cc
+				{
+					if(high[i-1] > mid[i-1] && close[i-1] < mid[i-1] && resStateL2.bufferCrossCount == 0) // bullish c/swipe
+					{
+						BufferBullishEvent[i] = low[i];
+					}
+					else resStateL2.bufferCrossCount++;
+				}
+				
+				if(resStateL2.bufferCrossCount > 0)
+				{
+					if(high[i] >= resistance[i] || high[i] >= BufferUp[i] || low[i] <= BufferDown[i])
+					{
+						resStateL2.bufferCrossCount = 0;
+					}
+				}
+			}
+			
+			if(resStateL2.crossState == INT_SUP)
+			{
+				if(IsBullishCandle(open, close, i) && open[i] < support[i]) // bullish cc
+				{
+					if(IsBearishCandle(open, close, i-1) && close[i] > open[i-1] && resStateL2.bufferCrossCount == 0) // bullish c/swipe
+					{
+						BufferBullishEvent[i] = low[i];
+					}
+					else if(close[i] > support[i]) resStateL2.bufferCrossCount++;
+				}
+				
+				if(resStateL2.bufferCrossCount > 0)
+				{
+					if(high[i] >= mid[i] || high[i] >= BufferUp[i] || low[i] <= BufferDown[i])
+					{
+						resStateL2.bufferCrossCount = 0;
+					}
+				}
+			}
+			
+			// crossState
+			if(resStateL2.crossState != INT_RES)
+			{
+				if((open[i] < resistance[i] && close[i] > resistance[i]) || (open[i] > resistance[i] && close[i] < resistance[i])) resStateL2.crossState = INT_RES;
+			}
+			else if(resStateL2.crossState != INT_MID)
+			{
+				if((open[i] < mid[i] && close[i] > mid[i]) || (open[i] > mid[i] && close[i] < mid[i])) resStateL2.crossState = INT_MID;
+			}
+			else if(resStateL2.crossState != INT_SUP)
+			{
+				if((open[i] < support[i] && close[i] > support[i]) || (open[i] > support[i] && close[i] < support[i])) resStateL2.crossState = INT_SUP;
+			}
+		}
+
+		// bearish
+		if(supStateL2.pushState == INT_LOW)
+		{
+			// countercross
+			if(supStateL2.crossState == INT_SUP)
+			{
+				if(open[i] > support[i] && close[i] < support[i]) // bearish cc
+				{
+					if(IsBullishCandle(open, close, i-1) && low[i-1] < support[i-1] && close[i-1] > support[i-1] && close[i] < open[i-1] && supStateL2.bufferCrossCount == 0) // bullish c/swipe
+					{
+						BufferBearishEvent[i] = high[i];
+					}
+					else supStateL2.bufferCrossCount++;
+				}
+				
+				if(supStateL2.bufferCrossCount > 0)
+				{
+					if(low[i] >= lower[i] || high[i] >= BufferUp[i] || low[i] <= BufferDown[i])
+					{
+						supStateL2.bufferCrossCount = 0;
+					}
+				}
+			}
+			
+			if(supStateL2.crossState == INT_MID)
+			{
+				if(open[i] > mid[i] && close[i] < mid[i]) // bullish cc
+				{
+					if(low[i-1] < mid[i-1] && close[i-1] > mid[i-1] && supStateL2.bufferCrossCount == 0) // bullish c/swipe
+					{
+						BufferBearishEvent[i] = high[i];
+					}
+					else supStateL2.bufferCrossCount++;
+				}
+				
+				if(supStateL2.bufferCrossCount > 0)
+				{
+					if(low[i] <= support[i] || high[i] >= BufferUp[i] || low[i] <= BufferDown[i])
+					{
+						supStateL2.bufferCrossCount = 0;
+					}
+				}
+			}
+			
+			if(supStateL2.crossState == INT_RES)
+			{
+				if(IsBearishCandle(open, close, i) && open[i] > resistance[i]) // bullish cc
+				{
+					if(IsBullishCandle(open, close, i-1) && close[i] < open[i-1] && supStateL2.bufferCrossCount == 0) // bullish c/swipe
+					{
+						BufferBearishEvent[i] = high[i];
+					}
+					else if(close[i] < resistance[i]) supStateL2.bufferCrossCount++;
+				}
+				
+				if(supStateL2.bufferCrossCount > 0)
+				{
+					if(low[i] <= mid[i] || high[i] >= BufferUp[i] || low[i] <= BufferDown[i])
+					{
+						supStateL2.bufferCrossCount = 0;
+					}
+				}
+			}
+			
+			// crossState
+			if(supStateL2.crossState != INT_RES)
+			{
+				if((open[i] < resistance[i] && close[i] > resistance[i]) || (open[i] > resistance[i] && close[i] < resistance[i])) supStateL2.crossState = INT_RES;
+			}
+			else if(supStateL2.crossState != INT_MID)
+			{
+				if((open[i] < mid[i] && close[i] > mid[i]) || (open[i] > mid[i] && close[i] < mid[i])) supStateL2.crossState = INT_MID;
+			}
+			else if(supStateL2.crossState != INT_SUP)
+			{
+				if((open[i] < support[i] && close[i] > support[i]) || (open[i] > support[i] && close[i] < support[i])) supStateL2.crossState = INT_SUP;
+			}
+		}
       
    } // limits
 
