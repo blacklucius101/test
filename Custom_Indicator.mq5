@@ -748,7 +748,7 @@ int OnCalculate(const int rates_total,
 					if(IsBearishCandle(open, close, i-1) && close[i] > open[i-1]) // bullish c/swipe
 					{
 						BufferBullishEvent[i] = low[i];
-					}
+					} // add exception: if countercross is invalid, ie. fails to trigger signal, the border in question becomes untradable until price touches another border (BufferUp?BufferDown included)
 				}
 			}
 			
@@ -759,7 +759,7 @@ int OnCalculate(const int rates_total,
 					if(IsBearishCandle(open, close, i-1) && high[i-1] > mid[i-1] && close[i-1] < mid[i-1]) // bullish c/swipe
 					{
 						BufferBullishEvent[i] = low[i];
-					}
+					} // add exception
 				}
 			}
 			
@@ -770,7 +770,7 @@ int OnCalculate(const int rates_total,
 					if(IsBearishCandle(open, close, i-1) && high[i-1] > resistance[i-1] && close[i-1] < resistance[i-1] && close[i] > open[i-1]) // bullish c/swipe
 					{
 						BufferBullishEvent[i] = low[i];
-					}
+					} // add exception
 				}
 			}
 			
@@ -779,13 +779,15 @@ int OnCalculate(const int rates_total,
 			{
 				resStateL2.crossState = INT_SUP; // disagreeing border: special
 			}
-			else if((open[i] > mid[i] && close[i] < mid[i]) || (open[i] < mid[i] && close[i] < mid[i]))
+			else if((open[i] > mid[i] && close[i] < mid[i]) || (open[i] < mid[i] && close[i] < mid[i])) // to accomodate swipes, cross is allowed an adjacent 1 candle buffer. this means swipe only occurs if previous candle is a cross, or rather cross holds if the next candle shares same direction.
 			{
 				resStateL2.crossState = INT_MID;
+				crossBuffer = 1;
 			}
 			else if((open[i] > resistance[i] && close[i] < resistance[i]) || (open[i] < resistance[i] && close[i] < resistance[i]))
 			{
 				resStateL2.crossState = INT_RES;
+				crossBuffer = 1;
 			}
 		}
 
@@ -800,7 +802,7 @@ int OnCalculate(const int rates_total,
 					if(IsBullishCandle(open, close, i-1) && close[i] < open[i-1]) // bearish c/swipe
 					{
 						BufferBearishEvent[i] = high[i];
-					}
+					} // add exception: if countercross is invalid, ie. fails to trigger signal, the border in question becomes untradable until price touches another border (BufferUp?BufferDown included)
 				}
 			}
 			
@@ -811,7 +813,7 @@ int OnCalculate(const int rates_total,
 					if(IsBullishCandle(open, close, i-1) && low[i-1] < mid[i-1] && close[i-1] > mid[i-1]) // bearish c/swipe
 					{
 						BufferBearishEvent[i] = high[i];
-					}
+					} // add exception
 				}
 			}
 			
@@ -822,7 +824,7 @@ int OnCalculate(const int rates_total,
 					if(IsBullishCandle(open, close, i-1) && low[i-1] < support[i-1] && close[i-1] > support[i-1] && close[i] < open[i-1]) // bearish c/swipe
 					{
 						BufferBearishEvent[i] = high[i];
-					}
+					} // add exception
 				}
 			}
 			
@@ -831,13 +833,15 @@ int OnCalculate(const int rates_total,
 			{
 				supStateL2.crossState = INT_RES; // disagreeing border: special
 			}
-			else if((open[i] < mid[i] && close[i] > mid[i]) || (open[i] > mid[i] && close[i] > mid[i]))
+			else if(open[i] < mid[i] && close[i] > mid[i]) // to accomodate swipes, cross is allowed a 1 candle buffer. this means swipe only occurs if previous candle is a cross, or rather cross holds if the next candle shares same direction.
 			{
 				supStateL2.crossState = INT_MID;
+				crossBuffer = 1;
 			}
-			else if((open[i] < support[i] && close[i] > support[i]) || (open[i] > support[i] && close[i] > support[i]))
+			else if(open[i] < support[i] && close[i] > support[i])
 			{
 				supStateL2.crossState = INT_SUP;
+				crossBuffer = 1;
 			}
 		}
       
@@ -846,4 +850,4 @@ int OnCalculate(const int rates_total,
    return(rates_total);
 }
 //+------------------------------------------------------------------+
-
+// exploring the possibility of countercross also having a candle buffer that holds provided it is not interrupted by a different direction candle
