@@ -140,11 +140,14 @@ int OnCalculate(const int rates_total,
                 const long &volume[],
                 const int &spread[])
 {
-   if(rates_total < 2) return 0;
+   // We require at least 3 bars (so at least 2 closed bars: bar 0 and bar rates_total-2)
+   if(rates_total < 3) return 0;
 
-   // Determine target day boundaries
-   datetime lastBarTime = time[rates_total - 1];
-   datetime refTime = (InpHistoricalDate == 0) ? lastBarTime : InpHistoricalDate;
+   // Ignore the live, incomplete candle at rates_total - 1
+   int last_closed_bar = rates_total - 2;
+
+   // Determine target day boundaries using the last closed bar if InpHistoricalDate is 0
+   datetime refTime = (InpHistoricalDate == 0) ? time[last_closed_bar] : InpHistoricalDate;
    
    MqlDateTime dt;
    TimeToStruct(refTime, dt);
@@ -152,81 +155,56 @@ int OnCalculate(const int rates_total,
    datetime dayStart = StructToTime(dt);
    datetime dayEnd = dayStart + 86400;
 
-   bool fullReset = false;
-   if(dayStart != targetDayStart) {
-      targetDayStart = dayStart;
-      targetDayEnd = dayEnd;
-      fullReset = true;
-   }
+   targetDayStart = dayStart;
+   targetDayEnd = dayEnd;
 
+   // Find target day range within available closed bars
    int first_idx = 0;
-   while(first_idx < rates_total && time[first_idx] < targetDayStart) {
+   while(first_idx <= last_closed_bar && time[first_idx] < targetDayStart) {
       first_idx++;
    }
 
-   if(first_idx >= rates_total) return rates_total;
+   if(first_idx > last_closed_bar) return rates_total;
 
-   int start;
-   if(fullReset || prev_calculated == 0) {
-      ArrayInitialize(HAOpen, 0.0);
-      ArrayInitialize(HAHigh, 0.0);
-      ArrayInitialize(HALow, 0.0);
-      ArrayInitialize(HAClose, 0.0);
-      ArrayInitialize(HAColor, 0.0);
-
-      // First bar calculation (bootstrapping using previous bar if available)
-      if(first_idx > 0) {
-         HAOpen[first_idx] = (open[first_idx - 1] + close[first_idx - 1]) / 2.0;
-      } else {
-         HAOpen[first_idx] = (open[0] + close[0]) / 2.0;
-      }
-      HAClose[first_idx] = (open[first_idx] + high[first_idx] + low[first_idx] + close[first_idx]) / 4.0;
-      HAHigh[first_idx] = MathMax(high[first_idx], MathMax(HAOpen[first_idx], HAClose[first_idx]));
-      HALow[first_idx] = MathMin(low[first_idx], MathMin(HAOpen[first_idx], HAClose[first_idx]));
-      HAColor[first_idx] = (HAOpen[first_idx] < HAClose[first_idx]) ? 0.0 : 1.0;
-
-      start = first_idx + 1;
-   } else {
-      start = prev_calculated - 1;
-      if(start < first_idx) {
-         start = first_idx;
-      }
-
-      if(start == first_idx) {
-         if(first_idx > 0) {
-            HAOpen[first_idx] = (open[first_idx - 1] + close[first_idx - 1]) / 2.0;
-         } else {
-            HAOpen[first_idx] = (open[0] + close[0]) / 2.0;
-         }
-         HAClose[first_idx] = (open[first_idx] + high[first_idx] + low[first_idx] + close[first_idx]) / 4.0;
-         HAHigh[first_idx] = MathMax(high[first_idx], MathMax(HAOpen[first_idx], HAClose[first_idx]));
-         HALow[first_idx] = MathMin(low[first_idx], MathMin(HAOpen[first_idx], HAClose[first_idx]));
-         HAColor[first_idx] = (HAOpen[first_idx] < HAClose[first_idx]) ? 0.0 : 1.0;
-
-         start = first_idx + 1;
-      }
+   int last_idx = first_idx;
+   while(last_idx <= last_closed_bar && time[last_idx] < targetDayEnd) {
+      last_idx++;
    }
+   last_idx--; // Adjust to last valid bar inside target day
 
-   // Main calculation loop
-   for(int i = start; i < rates_total && !IsStopped(); i++) {
-      if(time[i] >= targetDayEnd) break;
+   if(last_idx < first_idx) return rates_total;
 
-      HAOpen[i] = (HAOpen[i - 1] + HAClose[i - 1]) / 2.0;
+   // Clear all indicator buffers
+   ArrayInitialize(HAOpen,      0.0);
+   ArrayInitialize(HAHigh,      0.0);
+   ArrayInitialize(HALow,       0.0);
+   ArrayInitialize(HAClose,     0.0);
+   ArrayInitialize(HAColor,     0.0);
+   ArrayInitialize(LesserLow,   0.0);
+   ArrayInitialize(LesserHigh,  0.0);
+   ArrayInitialize(GreaterLow,  0.0);
+   ArrayInitialize(GreaterHigh, 0.0);
+
+   // --- Step 1: Compute Heiken Ashi candles for the target day
+   if(first_idx > 0) {
+      HAOpen[first_idx] = (open[first_idx - 1] + close[first_idx - 1]) / 2.0;
+   } else {
+      HAOpen[first_idx] = (open[0] + close[0]) / 2.0;
+   }
+   HAClose[first_idx] = (open[first_idx] + high[first_idx] + low[first_idx] + close[first_idx]) / 4.0;
+   HAHigh[first_idx]  = MathMax(high[first_idx], MathMax(HAOpen[first_idx], HAClose[first_idx]));
+   HALow[first_idx]   = MathMin(low[first_idx], MathMin(HAOpen[first_idx], HAClose[first_idx]));
+   HAColor[first_idx] = (HAOpen[first_idx] < HAClose[first_idx]) ? 0.0 : 1.0;
+
+   for(int i = first_idx + 1; i <= last_idx && !IsStopped(); i++) {
+      HAOpen[i]  = (HAOpen[i - 1] + HAClose[i - 1]) / 2.0;
       HAClose[i] = (open[i] + high[i] + low[i] + close[i]) / 4.0;
-      HAHigh[i] = MathMax(high[i], MathMax(HAOpen[i], HAClose[i]));
-      HALow[i] = MathMin(low[i], MathMin(HAOpen[i], HAClose[i]));
+      HAHigh[i]  = MathMax(high[i], MathMax(HAOpen[i], HAClose[i]));
+      HALow[i]   = MathMin(low[i], MathMin(HAOpen[i], HAClose[i]));
       HAColor[i] = (HAOpen[i] < HAClose[i]) ? 0.0 : 1.0;
    }
 
-   // --- Clear semafor buffers for target day range (*probably unnecessary at this point in the processing loop)
-   for(int i = first_idx; i < rates_total; i++) {
-      LesserLow[i]   = 0.0;
-      LesserHigh[i]  = 0.0;
-      GreaterLow[i]  = 0.0;
-      GreaterHigh[i] = 0.0;
-   }
-
-   // --- Semafor structure for target day tracking
+   // --- Step 2: Compute Lesser Semafors (Fractal anchoring & repainting)
    struct SemaforNode {
       int bar;
       bool is_high;
@@ -257,22 +235,19 @@ int OnCalculate(const int rates_total,
    semafors[0] = init_low;
    semafors[1] = init_high;
 
-   // Process target day bars for semafors
-   for(int i = first_idx + 1; i < rates_total && !IsStopped(); i++) {
-      if(time[i] >= targetDayEnd) break;
-
+   for(int i = first_idx + 1; i <= last_idx && !IsStopped(); i++) {
       int sz = ArraySize(semafors);
       if(sz < 1) break;
 
-      int last_idx = sz - 1;
-      SemaforNode last_node = semafors[last_idx];
+      int last_node_idx = sz - 1;
+      SemaforNode last_node = semafors[last_node_idx];
 
       if(last_node.is_high) {
          if(HAHigh[i] >= last_node.price) {
-            semafors[last_idx].bar = i;
-            semafors[last_idx].price = HAHigh[i];
+            semafors[last_node_idx].bar = i;
+            semafors[last_node_idx].price = HAHigh[i];
          }
-         else if(HALow[i] < semafors[last_idx - 1].price || HALow[i] < HALow[i - 1]) {
+         else if(HALow[i] < semafors[last_node_idx - 1].price || HALow[i] < HALow[i - 1]) {
             SemaforNode new_low;
             new_low.bar = i;
             new_low.is_high = false;
@@ -286,10 +261,10 @@ int OnCalculate(const int rates_total,
       }
       else {
          if(HALow[i] <= last_node.price) {
-            semafors[last_idx].bar = i;
-            semafors[last_idx].price = HALow[i];
+            semafors[last_node_idx].bar = i;
+            semafors[last_node_idx].price = HALow[i];
          }
-         else if(HAHigh[i] > semafors[last_idx - 1].price || HAHigh[i] > HAHigh[i - 1]) {
+         else if(HAHigh[i] > semafors[last_node_idx - 1].price || HAHigh[i] > HAHigh[i - 1]) {
             SemaforNode new_high;
             new_high.bar = i;
             new_high.is_high = true;
@@ -303,7 +278,7 @@ int OnCalculate(const int rates_total,
       }
    }
 
-   // Populate lesser semafors into indicator buffers
+   // Populate Lesser Semafors indicator buffers
    int num_nodes = ArraySize(semafors);
    for(int s = 0; s < num_nodes; s++) {
       int b = semafors[s].bar;
@@ -314,21 +289,21 @@ int OnCalculate(const int rates_total,
       }
    }
 
-   // Evaluate Greater Semafors (Dome distance >= 2x spread AND HA Color rule)
+   // --- Step 3: Evaluate Greater Semafors (Dome distance >= 2x spread AND matching HA Color)
    double spread_val = (double)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) * _Point;
    if(spread_val <= 0.0) {
       spread_val = _Point * 10.0;
    }
 
+   SemaforNode greater_semafors[];
+   ArrayResize(greater_semafors, 0);
+
    for(int s = 0; s < num_nodes; s++) {
       int b = semafors[s].bar;
-      bool color_ok = false;
 
-      if(semafors[s].is_high) {
-         color_ok = (HAColor[b] == 0.0); // Dodger Blue (bullish HA)
-      } else {
-         color_ok = (HAColor[b] == 1.0); // Red (bearish HA)
-      }
+      // HA Color matching: Dodger Blue (0.0) for High, Red (1.0) for Low
+      bool color_ok = semafors[s].is_high ? (HAColor[b] == 0.0) : (HAColor[b] == 1.0);
+      if(!color_ok) continue;
 
       bool dome_ok = false;
       double dome_mid = 0.0;
@@ -336,30 +311,30 @@ int OnCalculate(const int rates_total,
       if(s > 0) {
          int prev_b = semafors[s - 1].bar;
          if(semafors[s].is_high) {
-            // Low-to-High pair: find lowest high between prev_b and b (inclusive)
-            double lowest_high = HAHigh[prev_b];
+            // Low-to-High pair: find lowest low between prev_b and b (inclusive)
+            double lowest_low = HALow[prev_b];
             for(int k = prev_b; k <= b; k++) {
-               if(HAHigh[k] < lowest_high) lowest_high = HAHigh[k];
+               if(HALow[k] < lowest_low) lowest_low = HALow[k];
             }
-            double dome_dist = HAHigh[b] - lowest_high;
+            double dome_dist = HAHigh[b] - lowest_low;
             if(dome_dist >= 2.0 * spread_val) {
                dome_ok = true;
                dome_mid = HAHigh[b] - (dome_dist / 2.0);
             }
          } else {
-            // High-to-Low pair: find highest low between prev_b and b (inclusive)
-            double highest_low = HALow[prev_b];
+            // High-to-Low pair: find highest high between prev_b and b (inclusive)
+            double highest_high = HAHigh[prev_b];
             for(int k = prev_b; k <= b; k++) {
-               if(HALow[k] > highest_low) highest_low = HALow[k];
+               if(HAHigh[k] > highest_high) highest_high = HAHigh[k];
             }
-            double dome_dist = highest_low - HALow[b];
+            double dome_dist = highest_high - HALow[b];
             if(dome_dist >= 2.0 * spread_val) {
                dome_ok = true;
                dome_mid = HALow[b] + (dome_dist / 2.0);
             }
          }
       } else {
-         // First semafor at first_idx
+         // First semafor node at first_idx
          double dome_dist = HAHigh[b] - HALow[b];
          if(dome_dist >= 2.0 * spread_val) {
             dome_ok = true;
@@ -367,37 +342,66 @@ int OnCalculate(const int rates_total,
          }
       }
 
-      if(color_ok && dome_ok) {
-         semafors[s].is_greater = true;
-         semafors[s].dome_mid_price = dome_mid;
+      if(!dome_ok) continue;
 
-         if(semafors[s].is_high) {
-            GreaterHigh[b] = HAHigh[b];
+      // Candidate qualifies for Greater Semafor.
+      // Enforce strict High/Low alternation with repainting logic.
+      SemaforNode cand = semafors[s];
+      cand.is_greater = true;
+      cand.dome_mid_price = dome_mid;
+
+      int g_sz = ArraySize(greater_semafors);
+      if(g_sz == 0) {
+         ArrayResize(greater_semafors, 1);
+         greater_semafors[0] = cand;
+      } else {
+         SemaforNode last_g = greater_semafors[g_sz - 1];
+         if(last_g.is_high == cand.is_high) {
+            // Same type: check if repainting is required
+            if(cand.is_high) {
+               if(cand.price > last_g.price) {
+                  greater_semafors[g_sz - 1] = cand; // Repaint to higher High
+               }
+            } else {
+               if(cand.price < last_g.price) {
+                  greater_semafors[g_sz - 1] = cand; // Repaint to lower Low
+               }
+            }
          } else {
-            GreaterLow[b] = HALow[b];
+            // Opposite type: append new Greater Semafor
+            ArrayResize(greater_semafors, g_sz + 1);
+            greater_semafors[g_sz] = cand;
          }
       }
    }
 
-   // --- Clear previously created graphic objects
+   // Populate Greater Semafors indicator buffers
+   int num_greater = ArraySize(greater_semafors);
+   for(int g = 0; g < num_greater; g++) {
+      int b = greater_semafors[g].bar;
+      if(greater_semafors[g].is_high) {
+         GreaterHigh[b] = greater_semafors[g].price;
+      } else {
+         GreaterLow[b] = greater_semafors[g].price;
+      }
+   }
+
+   // --- Step 4: Clear previously created graphic objects
    ObjectsDeleteAll(0, "CustomHA_");
 
-   // --- Draw ZigZag lines and Dome Halfway horizontal lines for Greater Semafors
-   int prev_greater_idx = -1;
+   // --- Step 5: Draw ZigZag trendlines and Dome Halfway horizontal lines
    int obj_counter = 0;
 
-   for(int s = 0; s < num_nodes; s++) {
-      if(!semafors[s].is_greater) continue;
-
-      int cur_bar = semafors[s].bar;
+   for(int g = 0; g < num_greater; g++) {
+      int cur_bar = greater_semafors[g].bar;
       datetime cur_time = time[cur_bar];
-      double cur_price = semafors[s].price;
+      double cur_price = greater_semafors[g].price;
 
       // 1. Draw ZigZag line connecting to previous greater semafor
-      if(prev_greater_idx >= 0) {
-         int prev_bar = semafors[prev_greater_idx].bar;
+      if(g > 0) {
+         int prev_bar = greater_semafors[g - 1].bar;
          datetime prev_time = time[prev_bar];
-         double prev_price = semafors[prev_greater_idx].price;
+         double prev_price = greater_semafors[g - 1].price;
 
          string line_name = "CustomHA_ZZ_" + IntegerToString(obj_counter++);
          if(ObjectCreate(0, line_name, OBJ_TREND, 0, prev_time, prev_price, cur_time, cur_price)) {
@@ -406,70 +410,53 @@ int OnCalculate(const int rates_total,
             color line_color = (cur_price >= prev_price) ? clrDodgerBlue : clrRed;
             ObjectSetInteger(0, line_name, OBJPROP_COLOR, line_color);
          }
-      }
 
-      // 2. Draw short horizontal line (span = 20 bars) at the halfway point of the dome distance
-      if(semafors[s].dome_mid_price > 0.0) {
-         int half_span = 10;
-         int start_bar = MathMax(first_idx, cur_bar - half_span);
-         int end_bar   = MathMin(rates_total - 1, cur_bar + half_span);
+         // 2. Draw 20-bar short horizontal line at dome midpoint centered at ZigZag intersection
+         double mid_p = greater_semafors[g].dome_mid_price;
+         if(mid_p > 0.0 && prev_price != cur_price) {
+            // Find bar index B_mid where ZigZag segment intersects mid_p
+            double ratio = (mid_p - prev_price) / (cur_price - prev_price);
+            if(ratio < 0.0) ratio = 0.0;
+            if(ratio > 1.0) ratio = 1.0;
 
-         datetime start_time = time[start_bar];
-         datetime end_time   = time[end_bar];
-         double mid_p        = semafors[s].dome_mid_price;
+            int mid_bar = (int)MathRound(prev_bar + ratio * (cur_bar - prev_bar));
+            int half_span = 10;
+            int start_bar = MathMax(0, mid_bar - half_span);
+            int end_bar   = MathMin(rates_total - 1, mid_bar + half_span);
 
-         string mid_name = "CustomHA_Mid_" + IntegerToString(obj_counter++);
-         if(ObjectCreate(0, mid_name, OBJ_TREND, 0, start_time, mid_p, end_time, mid_p)) {
-            ObjectSetInteger(0, mid_name, OBJPROP_RAY_RIGHT, false);
-            ObjectSetInteger(0, mid_name, OBJPROP_WIDTH, 1);
-            ObjectSetInteger(0, mid_name, OBJPROP_STYLE, STYLE_DOT);
-            ObjectSetInteger(0, mid_name, OBJPROP_COLOR, clrOrange);
+            datetime start_time = time[start_bar];
+            datetime end_time   = time[end_bar];
+
+            string mid_name = "CustomHA_Mid_" + IntegerToString(obj_counter++);
+            if(ObjectCreate(0, mid_name, OBJ_TREND, 0, start_time, mid_p, end_time, mid_p)) {
+               ObjectSetInteger(0, mid_name, OBJPROP_RAY_RIGHT, false);
+               ObjectSetInteger(0, mid_name, OBJPROP_WIDTH, 1);
+               ObjectSetInteger(0, mid_name, OBJPROP_STYLE, STYLE_DOT);
+               ObjectSetInteger(0, mid_name, OBJPROP_COLOR, clrOrange);
+            }
+         }
+      } else {
+         // First greater semafor (no previous greater semafor for ZigZag segment)
+         double mid_p = greater_semafors[g].dome_mid_price;
+         if(mid_p > 0.0) {
+            int half_span = 10;
+            int start_bar = MathMax(0, cur_bar - half_span);
+            int end_bar   = MathMin(rates_total - 1, cur_bar + half_span);
+
+            datetime start_time = time[start_bar];
+            datetime end_time   = time[end_bar];
+
+            string mid_name = "CustomHA_Mid_" + IntegerToString(obj_counter++);
+            if(ObjectCreate(0, mid_name, OBJ_TREND, 0, start_time, mid_p, end_time, mid_p)) {
+               ObjectSetInteger(0, mid_name, OBJPROP_RAY_RIGHT, false);
+               ObjectSetInteger(0, mid_name, OBJPROP_WIDTH, 1);
+               ObjectSetInteger(0, mid_name, OBJPROP_STYLE, STYLE_DOT);
+               ObjectSetInteger(0, mid_name, OBJPROP_COLOR, clrOrange);
+            }
          }
       }
-
-      prev_greater_idx = s;
    }
 
    return(rates_total);
 }
 //+------------------------------------------------------------------+
-
-/* Custom functionality
------------------------
-//--- High semafors
-#property indicator_type   DRAW_ARROW
-#property indicator_color  Aqua
-#property indicator_width  1
-
-//--- Low semafors
-#property indicator_type   DRAW_ARROW
-#property indicator_color  Magenta
-#property indicator_width  1
-
-//--- Notables (Lesser semafor parameters)
-Period      = 2;
-Backstep    = 1;
-
-int lesser_semafor_symbol = 158;
-int greater_semafor_symbol  = 159;
-int ArrowShiftPixels = 10; // for visual acuity of semafors
-
-//--- Set arrow shifts
-PlotIndexSetInteger(high_semafor_plots, PLOT_ARROW_SHIFT, ArrowShiftPixels); // shifted up
-PlotIndexSetInteger(low_semafor_plots, PLOT_ARROW_SHIFT, -ArrowShiftPixels); // shifted down
-
-//--- OnCalculate
-- Restructure to only execute on closed candles. Process sequentially, that probably involves using a single main loop.
-- If current index is first bar of the target day, bootstrap lesser semafors by anchoring semafors to HAHigh and HALow of that first bar.
-- For subsequent candles, repaint lesser semafors higher or lower depending on whether previous anchor was exceeded (see lesser semafor period and backstep parameters above).
-- Greater semafors occur when the "dome" distance is at least 2x the instrument spread and the semafor is anchored to a corresponding HAColor bar, ie.:
-   - High semafor on dodger blue bar.
-   - Low semafor on to red bar.
-- "Dome" distance is defined as follows (assume non-series, ie. oldest-latest, high[4]-low[7], low[7]-high[11]):
-   - For a high-low semafor pair, the low is a "greater semafor" if the distance from its HALow anchor to the highest low between the two bars (inclusive) is at least twice the symbol's spread.
-   - For a low-high semafor pair, the high is a "greater semafor" if the distance from its HAHigh anchor to the lowest high between the two bars (inclusive) is at least twice the symbol's spread.
-- Draw a straight line (color dictated by slope) connecting high and low greater semafors, in zigzag fashion but using objects, not buffers.
-- Unlike lesser semafors, greater semafors must alternate such that no two high greater semafors occur consecutively without an intervening low greater semafor.
-- For this reason, it is expected for greater semafors to repaint onto higher/lower positions if an intermission is missed, or remain unchanged if the new position does not exceed the previous one.
-- Secondary feature: A short horizontal line (no ray extensions), preferably anchored to the zigzag connecting line, ought to mark out the halfway point of the "dome" distance.
-*/
