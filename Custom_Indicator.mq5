@@ -420,9 +420,9 @@ int OnCalculate(const int rates_total,
             if(ratio > 1.0) ratio = 1.0;
 
             int mid_bar = (int)MathRound(prev_bar + ratio * (cur_bar - prev_bar));
-            int half_span = 10;
-            int start_bar = MathMax(0, mid_bar - half_span);
-            int end_bar   = MathMin(rates_total - 1, mid_bar + half_span);
+            int line_span = 10;
+            int start_bar = mid_bar;
+            int end_bar   = MathMin(rates_total - 1, mid_bar + line_span);
 
             datetime start_time = time[start_bar];
             datetime end_time   = time[end_bar];
@@ -439,9 +439,9 @@ int OnCalculate(const int rates_total,
          // First greater semafor (no previous greater semafor for ZigZag segment)
          double mid_p = greater_semafors[g].dome_mid_price;
          if(mid_p > 0.0) {
-            int half_span = 10;
-            int start_bar = MathMax(0, cur_bar - half_span);
-            int end_bar   = MathMin(rates_total - 1, cur_bar + half_span);
+            int line_span = 10;
+            int start_bar = cur_bar;
+            int end_bar   = MathMin(rates_total - 1, cur_bar + line_span);
 
             datetime start_time = time[start_bar];
             datetime end_time   = time[end_bar];
