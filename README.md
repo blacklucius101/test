@@ -1,4 +1,4 @@
-Revise the existing OnCalculate() function according to the requirements below. Preserve existing behavior unless a change is explicitly required.
+Revise the existing OnCalculate() function in `Custom_Indicator.mq5` according to the requirements below. Preserve existing behavior unless a change is explicitly required.
 
 1. Process Closed Candles Sequentially — Simulate Real-Time Execution
 The current implementation processes all candles in batches: it calculates all Heiken Ashi candles, then identifies all Lesser Semafors, then evaluates all Greater Semafors, and finally draws the chart objects.
