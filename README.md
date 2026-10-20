@@ -1,24 +1,3 @@
-Refactor `Custom_Indicator.mq5` to incorporate the specified high/low pivot functionality, ensuring optimized, lightweight, and efficient performance.
+1. The current implementation processes Heiken Ashi and Semafor calculations in one loop, then processes pivots and trendlines in a second loop, and finally renders pivot arrows and connecting lines in a third loop. This batch-processing approach does not meet my requirement. Refactor the code so that all three operations occur sequentially for each closed candle before advancing to the next candle: (1) calculate Heiken Ashi and Semafors, (2) process pivots and trendlines, and (3) render or update pivot arrows and connecting lines. Preserve the existing calculation logic, pivot detection rules, and visual styling. Ensure pivot updates or removals correctly update the buffers and chart objects, with no stale drawings or duplicate objects.
 
-Maintain per-day processing. Process sequentially: calculate Heiken Ashi, identify and plot high/low semafors on the Heiken Ashi candle, and proceed to the next candle. Repeat for all closed candles up to `rates_total - 2`, with real-time processing performed upon the close of the `rates_total - 1` candle (all this is presumably already implemented).
-
-At `first_idx`, the initial semafors are anchored to HAHigh (node0) and HALow (node1).
-
-Node1 repaints lower such that the distance between node0 and node1 exceeds twice the spread, and the anchor candle is HAColor red; pivot0 is registered here. Node1 anchor repaints lower, changes to HAColor dodger blue, and pivot0 is removed. Node2, a high semafor anchored to HAHigh, has its distance checked against pivot0. If the distance exceeds twice the spread and the anchor candle is HAColor dodger blue, pivot1 is registered. Draw a style-dot connecting line between pivot anchors, with color determined by slope. If pivot1 is deregistered, pivot0 may repaint lower or be deregistered. Pivot0 and pivot1 must alternate types. Following pivot1, the system should scan for a low semafor satisfying pivot conditions to register pivot2, or a high exceeding pivot1 to repaint or deregister pivot1 if the HAColor does not match. Note: pivot0 may be a high or low semafor.
-
-Dome distance is defined as follows:
-
-* **High pivot → low semafor:** The low semafor becomes a low pivot if the distance from the high pivot's HAHigh anchor to the lowest HAHigh between the high pivot and the low semafor (inclusive) is greater than twice the symbol's spread.
-
-* **Low pivot → high semafor:** The high semafor becomes a high pivot if the distance from the low pivot's HALow anchor to the highest HALow between the low pivot and the high semafor (inclusive) is greater than twice the symbol's spread.
-
-As no pivots exist at `first_idx`, we bootstrap the process by arbitrarily assigning the `first_idx` HAHigh and HALow as starting pivot anchors:
-
-* **Starting high pivot → low semafor**
-* **Starting low pivot → high semafor**
-
-By design, a double pivot is unlikely to survive the bootstrap. Only one pivot0 will be formed, from which actual pivoting can commence.
-
-Note that pivots may repaint lower or higher; therefore, focus is directed toward semafors that exceed the previously recorded semafor.
-
-Secondary feature: A short, orange, dotted horizontal line, anchored to the pivot connecting line and spanning 10 bars to the right, marks the midpoint of the dome distance.
+2. While a pivot remains active and no opposite pivot has been confirmed, its dome distance must remain mutable and track the true extreme across all eligible closed candles in the relevant pivot-to-pivot interval. For a high-to-low move, keep updating the lowest HAHigh if a new lower HAHigh is detected; for a low-to-high move, keep updating the highest HALow if a new higher HALow is detected. Recalculate the dome distance on every closed candle, independently of whether the pivot candidate's HALow or HAHigh changes (ie. the dome extreme should be tracked independently of the pivot candidate). When an opposite pivot is confirmed, finalize that leg and begin tracking the next one.
