@@ -244,26 +244,18 @@ int OnCalculate(const int rates_total,
    LowBuffer[first_idx] = HALow[first_idx];
    HighBuffer[first_idx] = HAHigh[first_idx];
 
-   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-   if(point == 0.0) point = _Point;
-   long current_spread = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
-   double double_spread = 2.0 * current_spread * point;
-
-   SPivot pivots[100];
-   int num_pivots = 0;
-   int periodSec = PeriodSeconds();
-
-   // Main calculation loop: sequential per-candle processing
+   // Main calculation loop for Heiken Ashi & Semafors
    for(int i = first_idx + 1; i <= max_idx && !IsStopped(); i++) {
       if(time[i] >= targetDayEnd) break;
 
-      // (1) Calculate Heiken Ashi candle & Semafors for bar i
+      // Calculate Heiken Ashi candle
       HAOpen[i] = (HAOpen[i - 1] + HAClose[i - 1]) / 2.0;
       HAClose[i] = (open[i] + high[i] + low[i] + close[i]) / 4.0;
       HAHigh[i] = MathMax(high[i], MathMax(HAOpen[i], HAClose[i]));
       HALow[i] = MathMin(low[i], MathMin(HAOpen[i], HAClose[i]));
       HAColor[i] = (HAOpen[i] < HAClose[i]) ? 0.0 : 1.0;
 
+      // Calculate Low Semafor (buy arrow)
       if(HALow[i] < HALow[i - 1]) {
          LowBuffer[i] = HALow[i];
          LowBuffer[i - 1] = 0.0;
@@ -271,14 +263,29 @@ int OnCalculate(const int rates_total,
          LowBuffer[i] = 0.0;
       }
 
+      // Calculate High Semafor (sell arrow)
       if(HAHigh[i] > HAHigh[i - 1]) {
          HighBuffer[i] = HAHigh[i];
          HighBuffer[i - 1] = 0.0;
       } else {
          HighBuffer[i] = 0.0;
       }
+   }
 
-      // (2) Process Pivots & Trendlines up to bar i
+   // --- Pivot & Trendline Processing ---
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   if(point == 0.0) point = _Point;
+   long current_spread = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
+   double double_spread = 2.0 * current_spread * point;
+
+   ObjectsDeleteByPrefix(OBJ_PREFIX);
+
+   SPivot pivots[100];
+   int num_pivots = 0;
+
+   for(int i = first_idx + 1; i <= max_idx && !IsStopped(); i++) {
+      if(time[i] >= targetDayEnd) break;
+
       if(num_pivots == 0) {
          // Bootstrap phase
          int L_cand = first_idx;
@@ -287,7 +294,7 @@ int OnCalculate(const int rates_total,
          }
 
          int min_HAHigh_idx = first_idx;
-         for(int k = first_idx; k <= i; k++) {
+         for(int k = first_idx; k <= L_cand; k++) {
             if(HAHigh[k] <= HAHigh[min_HAHigh_idx]) min_HAHigh_idx = k;
          }
          double min_HAHigh = HAHigh[min_HAHigh_idx];
@@ -309,7 +316,7 @@ int OnCalculate(const int rates_total,
             }
 
             int max_HALow_idx = first_idx;
-            for(int k = first_idx; k <= i; k++) {
+            for(int k = first_idx; k <= H_cand; k++) {
                if(HALow[k] >= HALow[max_HALow_idx]) max_HALow_idx = k;
             }
             double max_HALow = HALow[max_HALow_idx];
@@ -333,27 +340,29 @@ int OnCalculate(const int rates_total,
             int prev_H_idx = (num_pivots >= 2) ? pivots[num_pivots - 2].bar_idx : first_idx;
             double prev_H_price = (num_pivots >= 2) ? pivots[num_pivots - 2].price : HAHigh[first_idx];
 
-            int L_cand = prev_H_idx;
-            for(int k = prev_H_idx; k <= i; k++) {
+            int L_cand = pivots[num_pivots - 1].bar_idx;
+            for(int k = pivots[num_pivots - 1].bar_idx; k <= i; k++) {
                if(HALow[k] <= HALow[L_cand]) L_cand = k;
             }
 
-            int min_HAHigh_idx = prev_H_idx;
-            for(int k = prev_H_idx; k <= i; k++) {
-               if(HAHigh[k] <= HAHigh[min_HAHigh_idx]) min_HAHigh_idx = k;
-            }
-            double min_HAHigh = HAHigh[min_HAHigh_idx];
-            double dome = prev_H_price - min_HAHigh;
+            if(HALow[L_cand] < pivots[num_pivots - 1].price) {
+               int min_HAHigh_idx = prev_H_idx;
+               for(int k = prev_H_idx; k <= L_cand; k++) {
+                  if(HAHigh[k] <= HAHigh[min_HAHigh_idx]) min_HAHigh_idx = k;
+               }
+               double min_HAHigh = HAHigh[min_HAHigh_idx];
+               double dome = prev_H_price - min_HAHigh;
 
-            if(dome > double_spread && HAColor[L_cand] == 1.0) {
-               pivots[num_pivots - 1].bar_idx = L_cand;
-               pivots[num_pivots - 1].price = HALow[L_cand];
-               pivots[num_pivots - 1].time = time[L_cand];
-               pivots[num_pivots - 1].extreme_idx = min_HAHigh_idx;
-               pivots[num_pivots - 1].extreme_price = min_HAHigh;
-               pivots[num_pivots - 1].midpoint_price = (prev_H_price + min_HAHigh) / 2.0;
-            } else if(HAColor[L_cand] == 0.0) {
-               num_pivots--;
+               if(dome > double_spread && HAColor[L_cand] == 1.0) {
+                  pivots[num_pivots - 1].bar_idx = L_cand;
+                  pivots[num_pivots - 1].price = HALow[L_cand];
+                  pivots[num_pivots - 1].time = time[L_cand];
+                  pivots[num_pivots - 1].extreme_idx = min_HAHigh_idx;
+                  pivots[num_pivots - 1].extreme_price = min_HAHigh;
+                  pivots[num_pivots - 1].midpoint_price = (prev_H_price + min_HAHigh) / 2.0;
+               } else if(HAColor[L_cand] == 0.0) {
+                  num_pivots--;
+               }
             }
 
             if(num_pivots > 0 && pivots[num_pivots - 1].type == -1) {
@@ -366,13 +375,13 @@ int OnCalculate(const int rates_total,
                }
 
                int max_HALow_idx = L_idx;
-               for(int k = L_idx; k <= i; k++) {
+               for(int k = L_idx; k <= H_cand; k++) {
                   if(HALow[k] >= HALow[max_HALow_idx]) max_HALow_idx = k;
                }
                double max_HALow = HALow[max_HALow_idx];
-               double dome_opp = max_HALow - L_price;
+               double dome = max_HALow - L_price;
 
-               if(dome_opp > double_spread && HAColor[H_cand] == 0.0 && num_pivots < 100) {
+               if(dome > double_spread && HAColor[H_cand] == 0.0 && num_pivots < 100) {
                   pivots[num_pivots].type = 1;
                   pivots[num_pivots].bar_idx = H_cand;
                   pivots[num_pivots].price = HAHigh[H_cand];
@@ -387,27 +396,29 @@ int OnCalculate(const int rates_total,
             int prev_L_idx = (num_pivots >= 2) ? pivots[num_pivots - 2].bar_idx : first_idx;
             double prev_L_price = (num_pivots >= 2) ? pivots[num_pivots - 2].price : HALow[first_idx];
 
-            int H_cand = prev_L_idx;
-            for(int k = prev_L_idx; k <= i; k++) {
+            int H_cand = pivots[num_pivots - 1].bar_idx;
+            for(int k = pivots[num_pivots - 1].bar_idx; k <= i; k++) {
                if(HAHigh[k] >= HAHigh[H_cand]) H_cand = k;
             }
 
-            int max_HALow_idx = prev_L_idx;
-            for(int k = prev_L_idx; k <= i; k++) {
-               if(HALow[k] >= HALow[max_HALow_idx]) max_HALow_idx = k;
-            }
-            double max_HALow = HALow[max_HALow_idx];
-            double dome = max_HALow - prev_L_price;
+            if(HAHigh[H_cand] > pivots[num_pivots - 1].price) {
+               int max_HALow_idx = prev_L_idx;
+               for(int k = prev_L_idx; k <= H_cand; k++) {
+                  if(HALow[k] >= HALow[max_HALow_idx]) max_HALow_idx = k;
+               }
+               double max_HALow = HALow[max_HALow_idx];
+               double dome = max_HALow - prev_L_price;
 
-            if(dome > double_spread && HAColor[H_cand] == 0.0) {
-               pivots[num_pivots - 1].bar_idx = H_cand;
-               pivots[num_pivots - 1].price = HAHigh[H_cand];
-               pivots[num_pivots - 1].time = time[H_cand];
-               pivots[num_pivots - 1].extreme_idx = max_HALow_idx;
-               pivots[num_pivots - 1].extreme_price = max_HALow;
-               pivots[num_pivots - 1].midpoint_price = (prev_L_price + max_HALow) / 2.0;
-            } else if(HAColor[H_cand] == 1.0) {
-               num_pivots--;
+               if(dome > double_spread && HAColor[H_cand] == 0.0) {
+                  pivots[num_pivots - 1].bar_idx = H_cand;
+                  pivots[num_pivots - 1].price = HAHigh[H_cand];
+                  pivots[num_pivots - 1].time = time[H_cand];
+                  pivots[num_pivots - 1].extreme_idx = max_HALow_idx;
+                  pivots[num_pivots - 1].extreme_price = max_HALow;
+                  pivots[num_pivots - 1].midpoint_price = (prev_L_price + max_HALow) / 2.0;
+               } else if(HAColor[H_cand] == 1.0) {
+                  num_pivots--;
+               }
             }
 
             if(num_pivots > 0 && pivots[num_pivots - 1].type == 1) {
@@ -420,13 +431,13 @@ int OnCalculate(const int rates_total,
                }
 
                int min_HAHigh_idx = H_idx;
-               for(int k = H_idx; k <= i; k++) {
+               for(int k = H_idx; k <= L_cand; k++) {
                   if(HAHigh[k] <= HAHigh[min_HAHigh_idx]) min_HAHigh_idx = k;
                }
                double min_HAHigh = HAHigh[min_HAHigh_idx];
-               double dome_opp = H_price - min_HAHigh;
+               double dome = H_price - min_HAHigh;
 
-               if(dome_opp > double_spread && HAColor[L_cand] == 1.0 && num_pivots < 100) {
+               if(dome > double_spread && HAColor[L_cand] == 1.0 && num_pivots < 100) {
                   pivots[num_pivots].type = -1;
                   pivots[num_pivots].bar_idx = L_cand;
                   pivots[num_pivots].price = HALow[L_cand];
@@ -439,46 +450,41 @@ int OnCalculate(const int rates_total,
             }
          }
       }
+   }
 
-      // (3) Render Pivot Plot Arrows & Connecting Lines up to bar i
-      for(int b = first_idx; b <= i; b++) {
-         PivotLowBuffer[b] = 0.0;
-         PivotHighBuffer[b] = 0.0;
+   // --- Render Pivot Plot Arrows & Connecting Lines ---
+   int periodSec = PeriodSeconds();
+
+   for(int k = 0; k < num_pivots; k++) {
+      if(pivots[k].type == -1) {
+         PivotLowBuffer[pivots[k].bar_idx] = pivots[k].price;
+      } else if(pivots[k].type == 1) {
+         PivotHighBuffer[pivots[k].bar_idx] = pivots[k].price;
       }
 
-      ObjectsDeleteByPrefix(OBJ_PREFIX);
-
-      for(int k = 0; k < num_pivots; k++) {
-         if(pivots[k].type == -1) {
-            PivotLowBuffer[pivots[k].bar_idx] = pivots[k].price;
-         } else if(pivots[k].type == 1) {
-            PivotHighBuffer[pivots[k].bar_idx] = pivots[k].price;
-         }
-
-         datetime prev_t;
-         double prev_p;
-         if(k == 0) {
-            prev_t = time[first_idx];
-            prev_p = (pivots[0].type == -1) ? HAHigh[first_idx] : HALow[first_idx];
-         } else {
-            prev_t = pivots[k - 1].time;
-            prev_p = pivots[k - 1].price;
-         }
-
-         datetime t1 = prev_t;
-         double p1 = prev_p;
-         datetime t2 = pivots[k].time;
-         double p2 = pivots[k].price;
-         color line_color = (p2 >= p1) ? clrAqua : clrMagenta;
-         string line_name = OBJ_PREFIX + "Line_" + IntegerToString(k);
-         DrawTrendLine(line_name, t1, p1, t2, p2, line_color, STYLE_DOT, 1);
-
-         string mid_name = OBJ_PREFIX + "Mid_" + IntegerToString(k);
-         datetime mt1 = time[pivots[k].extreme_idx];
-         datetime mt2 = mt1 + 10 * periodSec;
-         double mp = pivots[k].midpoint_price;
-         DrawTrendLine(mid_name, mt1, mp, mt2, mp, clrOrange, STYLE_DOT, 1);
+      datetime prev_t;
+      double prev_p;
+      if(k == 0) {
+         prev_t = time[first_idx];
+         prev_p = (pivots[0].type == -1) ? HAHigh[first_idx] : HALow[first_idx];
+      } else {
+         prev_t = pivots[k - 1].time;
+         prev_p = pivots[k - 1].price;
       }
+
+      datetime t1 = prev_t;
+      double p1 = prev_p;
+      datetime t2 = pivots[k].time;
+      double p2 = pivots[k].price;
+      color line_color = (p2 >= p1) ? clrAqua : clrMagenta;
+      string line_name = OBJ_PREFIX + "Line_" + IntegerToString(k);
+      DrawTrendLine(line_name, t1, p1, t2, p2, line_color, STYLE_DOT, 1);
+
+      string mid_name = OBJ_PREFIX + "Mid_" + IntegerToString(k);
+      datetime mt1 = time[pivots[k].extreme_idx];
+      datetime mt2 = mt1 + 10 * periodSec;
+      double mp = pivots[k].midpoint_price;
+      DrawTrendLine(mid_name, mt1, mp, mt2, mp, clrOrange, STYLE_DOT, 1);
    }
 
    return(rates_total);
