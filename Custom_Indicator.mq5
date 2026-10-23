@@ -5,12 +5,12 @@
 #property link      "https://www.mql5.com"
 #property version   "1.00"
 #property indicator_chart_window
-#property indicator_buffers 7
-#property indicator_plots   3
+#property indicator_buffers 9
+#property indicator_plots   5
 
 //--- Plot 1: Heiken Ashi bars
 #property indicator_type1   DRAW_COLOR_BARS
-#property indicator_color1  clrDodgerBlue, clrRed
+#property indicator_color1  clrDodgerBlue, clrRed // 1.0, 0.0
 #property indicator_label1  "HA Open;HA High;HA Low;HA Close"
 
 //--- Plot 2: Bullish Semafor Low arrow
@@ -22,6 +22,16 @@
 #property indicator_type3   DRAW_ARROW
 #property indicator_color3  clrMagenta
 #property indicator_label3  "High"
+
+//--- Plot 4: Pivot Low arrow
+#property indicator_type4   DRAW_ARROW
+#property indicator_color4  clrAqua
+#property indicator_label4  "Pivot Low"
+
+//--- Plot 5: Pivot High arrow
+#property indicator_type5   DRAW_ARROW
+#property indicator_color5  clrMagenta
+#property indicator_label5  "Pivot High"
 
 //--- input parameters
 input datetime InpHistoricalDate = 0;   // Historical Date (YYYY.MM.DD) - 0 for Current Day
@@ -37,8 +47,49 @@ double HAColor[];
 double LowBuffer[];
 double HighBuffer[];
 
+//--- Pivot arrow buffers (7-8)
+double PivotLowBuffer[];
+double PivotHighBuffer[];
+
+double g_spread_price = 0.0;
+
 datetime targetDayStart = 0;
 datetime targetDayEnd = 0;
+
+enum ENUM_PIVOT_TYPE {
+   PIVOT_TYPE_NONE = 0,
+   PIVOT_TYPE_LOW  = 1,
+   PIVOT_TYPE_HIGH = 2
+};
+
+struct LowTracker {
+   double start_high_price;
+   double lowest_HAHigh;
+   double lowest_HALow;
+   int    lowest_HALow_idx;
+};
+
+struct HighTracker {
+   double start_low_price;
+   double highest_HALow;
+   double highest_HAHigh;
+   int    highest_HAHigh_idx;
+};
+
+struct PivotInfo { // HACandle tracker
+   ENUM_PIVOT_TYPE type;
+   int    bar_idx;
+   double anchor_price;
+   double dome_extreme;
+   LowTracker  low_tr;
+   HighTracker high_tr;
+};
+
+// Global state variables for pivot tracking
+PivotInfo confirmed_pivots[];
+int       confirmed_count = 0;
+bool      low_cand_active = false;
+bool      high_cand_active = false;
 
 //+------------------------------------------------------------------+
 //| Custom indicator initialization function                         |
@@ -58,6 +109,10 @@ int OnInit()
    SetIndexBuffer(5, LowBuffer,  INDICATOR_DATA);
    SetIndexBuffer(6, HighBuffer, INDICATOR_DATA);
 
+   //--- Pivot arrow plots
+   SetIndexBuffer(7, PivotLowBuffer,  INDICATOR_DATA);
+   SetIndexBuffer(8, PivotHighBuffer, INDICATOR_DATA);
+
    //--- Set series orientation AFTER binding
    ArraySetAsSeries(HAOpen, false);
    ArraySetAsSeries(HAHigh, false);
@@ -66,6 +121,8 @@ int OnInit()
    ArraySetAsSeries(HAColor, false);
    ArraySetAsSeries(LowBuffer, false);
    ArraySetAsSeries(HighBuffer, false);
+   ArraySetAsSeries(PivotLowBuffer, false);
+   ArraySetAsSeries(PivotHighBuffer, false);
 
    //--- Plot properties for Heiken Ashi
    PlotIndexSetDouble(0, PLOT_EMPTY_VALUE, 0.0);
@@ -79,6 +136,19 @@ int OnInit()
    PlotIndexSetDouble(2, PLOT_EMPTY_VALUE, 0.0);
    PlotIndexSetInteger(2, PLOT_ARROW, 158);
    PlotIndexSetInteger(2, PLOT_ARROW_SHIFT, -10);  // High arrows shift UP (above price)
+
+   //--- Plot properties for Pivot Low (Plot index 3)
+   PlotIndexSetDouble(3, PLOT_EMPTY_VALUE, 0.0);
+   PlotIndexSetInteger(3, PLOT_ARROW, 159);
+   PlotIndexSetInteger(3, PLOT_ARROW_SHIFT, 10);
+
+   //--- Plot properties for Pivot High (Plot index 4)
+   PlotIndexSetDouble(4, PLOT_EMPTY_VALUE, 0.0);
+   PlotIndexSetInteger(4, PLOT_ARROW, 159);
+   PlotIndexSetInteger(4, PLOT_ARROW_SHIFT, -10);
+
+   // Fetch broker-reported spread once
+   g_spread_price = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) * _Point;
 
    //--- name for DataWindow
    IndicatorSetString(INDICATOR_SHORTNAME, "Custom Heiken Ashi ZZ Semafor");
@@ -141,6 +211,8 @@ int OnCalculate(const int rates_total,
       ArrayInitialize(HAColor, 0.0);
       ArrayInitialize(LowBuffer, 0.0);
       ArrayInitialize(HighBuffer, 0.0);
+      ArrayInitialize(PivotLowBuffer, 0.0);
+      ArrayInitialize(PivotHighBuffer, 0.0);
 
       // First bar calculation (bootstrapping using previous bar if available)
       if(first_idx > 0) {
@@ -157,28 +229,28 @@ int OnCalculate(const int rates_total,
       LowBuffer[first_idx] = HALow[first_idx];
       HighBuffer[first_idx] = HAHigh[first_idx];
 
+      // Initialize bootstrap pivot at first_idx
+      confirmed_pivots[0].type = PIVOT_TYPE_NONE;
+      confirmed_pivots[0].bar_idx = first_idx;
+      confirmed_pivots[0].anchor_price = 0.0;
+      confirmed_pivots[0].dome_extreme= 0.0;
+
+      confirmed_pivots[0].low_tr.start_high_price = HAHigh[first_idx]; // static
+      confirmed_pivots[0].low_tr.lowest_HAHigh = HAHigh[first_idx]; // dynamic
+      confirmed_pivots[0].low_tr.lowest_HALow = HALow[first_idx]; // dynamic
+      confirmed_pivots[0].low_tr.lowest_HALow_idx = first_idx; // dynamic
+
+      confirmed_pivots[0].high_tr.start_low_price = HALow[first_idx]; // static
+      confirmed_pivots[0].high_tr.highest_HALow = HALow[first_idx]; // dynamic
+      confirmed_pivots[0].high_tr.highest_HAHigh = HAHigh[first_idx]; // dynamic
+      confirmed_pivots[0].high_tr.highest_HAHigh_idx = first_idx; // dynamic
+
+      confirmed_count = 0;
+
       start = first_idx + 1;
    } else {
       start = prev_calculated - 1;
-      if(start < first_idx) {
-         start = first_idx;
-      }
-
-      if(start == first_idx) {
-         if(first_idx > 0) {
-            HAOpen[first_idx] = (open[first_idx - 1] + close[first_idx - 1]) / 2.0;
-         } else {
-            HAOpen[first_idx] = (open[0] + close[0]) / 2.0;
-         }
-         HAClose[first_idx] = (open[first_idx] + high[first_idx] + low[first_idx] + close[first_idx]) / 4.0;
-         HAHigh[first_idx] = MathMax(high[first_idx], MathMax(HAOpen[first_idx], HAClose[first_idx]));
-         HALow[first_idx] = MathMin(low[first_idx], MathMin(HAOpen[first_idx], HAClose[first_idx]));
-         HAColor[first_idx] = (HAOpen[first_idx] < HAClose[first_idx]) ? 0.0 : 1.0;
-
-         // Bootstrap Semafor at first_idx
-         LowBuffer[first_idx] = HALow[first_idx];
-         HighBuffer[first_idx] = HAHigh[first_idx];
-
+      if(start < first_idx + 1) {
          start = first_idx + 1;
       }
    }
@@ -209,6 +281,72 @@ int OnCalculate(const int rates_total,
       } else {
          HighBuffer[i] = 0.0;
       }
+
+      //------------------------------------------------------------------
+      // 1. UPDATE CANDIDATE LOW PIVOT TRACKING
+      //------------------------------------------------------------------
+      
+      if(HAHigh[i] < confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh) { // dome extreme evolves lower if exceeded
+         confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh = HAHigh[i];
+         confirmed_pivots[confirmed_count].dome_extreme = confirmed_count].low_tr.start_high_price - confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh;
+      }
+      
+      if(HALow[i] < confirmed_pivots[confirmed_count].low_tr.lowest_HALow) { // pivot anchor evolves lower if exceeded
+         confirmed_pivots[confirmed_count].low_tr.lowest_HALow = HALow[i];
+         confirmed_pivots[confirmed_count].low_tr.lowest_HALow_idx = i;
+         if(low_cand_active) { // check for HAColor alignment
+            if(HAColor[i] == 1.0) {
+               PivotLowBuffer[i] = HALow[i];
+            }
+            else if(HAColor[i] == 0.0) { // remove pivot and reassign state to previous (opposite) pivot
+               PivotLowBuffer[i] = 0.0;
+               confirmed_count--;
+               
+               confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh = confirmed_pivots[confirmed_count + 1].low_tr.lowest_HAHigh; // dynamic
+               confirmed_pivots[confirmed_count].low_tr.lowest_HALow = confirmed_pivots[confirmed_count + 1].low_tr.lowest_HALow; // dynamic
+               confirmed_pivots[confirmed_count].low_tr.lowest_HALow_idx = confirmed_pivots[confirmed_count + 1].low_tr.lowest_HALow_idx; // dynamic
+               
+               // This organicaly ensures we are working with the actual highest HALow and highest HAHigh without doing a full sorting of the entire range.
+               confirmed_pivots[confirmed_count].high_tr.highest_HALow < confirmed_pivots[confirmed_count + 1].low_tr.highest_HALow? confirmed_pivots[confirmed_count].high_tr.highest_HALow = confirmed_pivots[confirmed_count + 1].low_tr.highest_HALow; // dynamic
+               confirmed_pivots[confirmed_count].high_tr.highest_HAHigh < confirmed_pivots[confirmed_count + 1].high_tr.highest_HAHigh? confirmed_pivots[confirmed_count].high_tr.highest_HAHigh = confirmed_pivots[confirmed_count + 1].high_tr.highest_HAHigh; // dynamic
+               confirmed_pivots[confirmed_count].high_tr.highest_HAHigh_idx < confirmed_pivots[confirmed_count + 1].high_tr.highest_HAHigh_idx? confirmed_pivots[confirmed_count].high_tr.highest_HAHigh_idx = confirmed_pivots[confirmed_count + 1].high_tr.highest_HAHigh_idx; // dynamic
+            }
+         }
+      }
+      
+      if((confirmed_pivots[confirmed_count].dome_extreme > 2.0 * g_spread_price) && (HAColor[confirmed_pivots[confirmed_count].low_tr.lowest_HALow_idx] == 1.0) && !low_cand_active) {
+         high_cand_active = false;
+         low_cand_active = true;
+         PivotLowBuffer[confirmed_pivots[confirmed_count].low_tr.lowest_HALow_idx] = HALow[confirmed_pivots[confirmed_count].low_tr.lowest_HALow_idx];
+         confirmed_count++;
+         
+         //confirmed_pivots[confirmed_count] = confirmed_pivots[confirmed_count - 1];
+         
+         confirmed_pivots[confirmed_count].type = PIVOT_TYPE_LOW;
+         confirmed_pivots[confirmed_count].bar_idx = confirmed_pivots[confirmed_count - 1].low_tr.lowest_HALow_idx;
+         confirmed_pivots[confirmed_count].anchor_price = confirmed_pivots[confirmed_count - 1].low_tr.lowest_HALow;
+         confirmed_pivots[confirmed_count].dome_extreme = confirmed_pivots[confirmed_count - 1].dome_extreme;
+         
+         confirmed_pivots[confirmed_count].low_tr.start_high_price = confirmed_pivots[confirmed_count - 1].low_tr.start_high_price; // static
+         confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh = confirmed_pivots[confirmed_count - 1].low_tr.lowest_HAHigh; // dynamic
+         confirmed_pivots[confirmed_count].low_tr.lowest_HALow = confirmed_pivots[confirmed_count - 1].low_tr.lowest_HALow; // dynamic
+         confirmed_pivots[confirmed_count].low_tr.lowest_HALow_idx = confirmed_pivots[confirmed_count - 1].low_tr.lowest_HALow_idx; // dynamic
+
+         confirmed_pivots[confirmed_count].high_tr.start_low_price = confirmed_pivots[confirmed_count - 1].low_tr.lowest_HALow; // static
+         confirmed_pivots[confirmed_count].high_tr.highest_HALow = confirmed_pivots[confirmed_count - 1].low_tr.highest_HALow; // dynamic
+         confirmed_pivots[confirmed_count].high_tr.highest_HAHigh = HAHigh[confirmed_pivots[confirmed_count].bar_idx]; // dynamic
+         confirmed_pivots[confirmed_count].high_tr.highest_HAHigh_idx = confirmed_pivots[confirmed_count].bar_idx; // dynamic
+
+      } else if ((confirmed_pivots[confirmed_count].dome_extreme > 2.0 * g_spread_price) && (HAColor[confirmed_pivots[confirmed_count].low_tr.lowest_HALow_idx] == 0.0)) {
+      
+      }
+
+      //------------------------------------------------------------------
+      // 2. UPDATE CANDIDATE HIGH PIVOT TRACKING
+      //------------------------------------------------------------------
+      // populate this section with the mirrored logic of low pivot tracking
+
+      
    }
 
    return(rates_total);
