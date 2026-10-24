@@ -1,2 +1,2 @@
 - I want to modify `Custom_Indicator` to connect consecutive confirmed pivots with dotted zigzag lines, using Aqua for rising segments and Magenta for falling segments.
-- I also want to add a short orange dotted horizontal line at each dome midpoint (ie. half of `dome_dist`). Each midpoint line must start at the bar where the dome extreme (ie. highest HALow, or lowest HAHigh) occurs, extend exactly 5 bars to the right, and have no ray extension.
+I'm undecided whether to use zigzag color buffers or chart objects. Pick the most lightweight solution.
