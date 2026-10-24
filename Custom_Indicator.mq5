@@ -91,6 +91,13 @@ int       confirmed_count = 0;
 bool      low_cand_active = false;
 bool      high_cand_active = false;
 
+// Helper function to safely ensure confirmed_pivots array size
+void EnsurePivotArrayCapacity(int required_size) {
+   if(ArraySize(confirmed_pivots) < required_size) {
+      ArrayResize(confirmed_pivots, required_size + 10);
+   }
+}
+
 //+------------------------------------------------------------------+
 //| Custom indicator initialization function                         |
 //+------------------------------------------------------------------+
@@ -229,11 +236,13 @@ int OnCalculate(const int rates_total,
       LowBuffer[first_idx] = HALow[first_idx];
       HighBuffer[first_idx] = HAHigh[first_idx];
 
+      EnsurePivotArrayCapacity(10);
+
       // Initialize bootstrap pivot at first_idx
       confirmed_pivots[0].type = PIVOT_TYPE_NONE;
       confirmed_pivots[0].bar_idx = first_idx;
       confirmed_pivots[0].anchor_price = 0.0;
-      confirmed_pivots[0].dome_extreme= 0.0;
+      confirmed_pivots[0].dome_extreme = 0.0;
 
       confirmed_pivots[0].low_tr.start_high_price = HAHigh[first_idx]; // static
       confirmed_pivots[0].low_tr.lowest_HAHigh = HAHigh[first_idx]; // dynamic
@@ -246,6 +255,8 @@ int OnCalculate(const int rates_total,
       confirmed_pivots[0].high_tr.highest_HAHigh_idx = first_idx; // dynamic
 
       confirmed_count = 0;
+      low_cand_active = false;
+      high_cand_active = false;
 
       start = first_idx + 1;
    } else {
@@ -285,66 +296,194 @@ int OnCalculate(const int rates_total,
       //------------------------------------------------------------------
       // 1. UPDATE CANDIDATE LOW PIVOT TRACKING
       //------------------------------------------------------------------
-      
-      if(HAHigh[i] < confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh) { // dome extreme evolves lower if exceeded
-         confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh = HAHigh[i];
-         confirmed_pivots[confirmed_count].dome_extreme = confirmed_count].low_tr.start_high_price - confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh;
-      }
-      
-      if(HALow[i] < confirmed_pivots[confirmed_count].low_tr.lowest_HALow) { // pivot anchor evolves lower if exceeded
-         confirmed_pivots[confirmed_count].low_tr.lowest_HALow = HALow[i];
-         confirmed_pivots[confirmed_count].low_tr.lowest_HALow_idx = i;
-         if(low_cand_active) { // check for HAColor alignment
-            if(HAColor[i] == 1.0) {
+      if(low_cand_active) {
+         // Active Low Pivot candidate (pivot1) is plotted at confirmed_pivots[confirmed_count].
+         // We continue tracking lower HAHigh and lower HALow from the parent pivot (confirmed_pivots[confirmed_count - 1]).
+         int parent_idx = confirmed_count - 1;
+         
+         if(HAHigh[i] < confirmed_pivots[parent_idx].low_tr.lowest_HAHigh) {
+            confirmed_pivots[parent_idx].low_tr.lowest_HAHigh = HAHigh[i];
+         }
+         
+         if(HALow[i] < confirmed_pivots[parent_idx].low_tr.lowest_HALow) {
+            confirmed_pivots[parent_idx].low_tr.lowest_HALow = HALow[i];
+            confirmed_pivots[parent_idx].low_tr.lowest_HALow_idx = i;
+            
+            // Anchor repaints lower
+            int old_bar = confirmed_pivots[confirmed_count].bar_idx;
+            
+            if(HAColor[i] == 1.0) { // Red candle -> valid low pivot repaints lower
+               PivotLowBuffer[old_bar] = 0.0;
                PivotLowBuffer[i] = HALow[i];
+               
+               confirmed_pivots[confirmed_count].bar_idx = i;
+               confirmed_pivots[confirmed_count].anchor_price = HALow[i];
+               confirmed_pivots[confirmed_count].dome_extreme = confirmed_pivots[parent_idx].low_tr.start_high_price - confirmed_pivots[parent_idx].low_tr.lowest_HAHigh;
+               
+               // Reset High Pivot tracker for this active Low Pivot starting from new anchor position i
+               confirmed_pivots[confirmed_count].high_tr.start_low_price = HALow[i];
+               confirmed_pivots[confirmed_count].high_tr.highest_HALow = HALow[i];
+               confirmed_pivots[confirmed_count].high_tr.highest_HAHigh = HAHigh[i];
+               confirmed_pivots[confirmed_count].high_tr.highest_HAHigh_idx = i;
             }
-            else if(HAColor[i] == 0.0) { // remove pivot and reassign state to previous (opposite) pivot
-               PivotLowBuffer[i] = 0.0;
+            else if(HAColor[i] == 0.0) { // DodgerBlue candle -> invalid, remove plot and rollback state
+               PivotLowBuffer[old_bar] = 0.0;
+               low_cand_active = false;
+               
+               // Merge tracked high values from removed pivot into parent pivot
+               if(confirmed_pivots[confirmed_count].high_tr.highest_HALow > confirmed_pivots[parent_idx].high_tr.highest_HALow) {
+                  confirmed_pivots[parent_idx].high_tr.highest_HALow = confirmed_pivots[confirmed_count].high_tr.highest_HALow;
+               }
+               if(confirmed_pivots[confirmed_count].high_tr.highest_HAHigh > confirmed_pivots[parent_idx].high_tr.highest_HAHigh) {
+                  confirmed_pivots[parent_idx].high_tr.highest_HAHigh = confirmed_pivots[confirmed_count].high_tr.highest_HAHigh;
+                  confirmed_pivots[parent_idx].high_tr.highest_HAHigh_idx = confirmed_pivots[confirmed_count].high_tr.highest_HAHigh_idx;
+               }
+               
                confirmed_count--;
-               
-               confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh = confirmed_pivots[confirmed_count + 1].low_tr.lowest_HAHigh; // dynamic
-               confirmed_pivots[confirmed_count].low_tr.lowest_HALow = confirmed_pivots[confirmed_count + 1].low_tr.lowest_HALow; // dynamic
-               confirmed_pivots[confirmed_count].low_tr.lowest_HALow_idx = confirmed_pivots[confirmed_count + 1].low_tr.lowest_HALow_idx; // dynamic
-               
-               // This organicaly ensures we are working with the actual highest HALow and highest HAHigh without doing a full sorting of the entire range.
-               confirmed_pivots[confirmed_count].high_tr.highest_HALow < confirmed_pivots[confirmed_count + 1].low_tr.highest_HALow? confirmed_pivots[confirmed_count].high_tr.highest_HALow = confirmed_pivots[confirmed_count + 1].low_tr.highest_HALow; // dynamic
-               confirmed_pivots[confirmed_count].high_tr.highest_HAHigh < confirmed_pivots[confirmed_count + 1].high_tr.highest_HAHigh? confirmed_pivots[confirmed_count].high_tr.highest_HAHigh = confirmed_pivots[confirmed_count + 1].high_tr.highest_HAHigh; // dynamic
-               confirmed_pivots[confirmed_count].high_tr.highest_HAHigh_idx < confirmed_pivots[confirmed_count + 1].high_tr.highest_HAHigh_idx? confirmed_pivots[confirmed_count].high_tr.highest_HAHigh_idx = confirmed_pivots[confirmed_count + 1].high_tr.highest_HAHigh_idx; // dynamic
             }
          }
       }
-      
-      if((confirmed_pivots[confirmed_count].dome_extreme > 2.0 * g_spread_price) && (HAColor[confirmed_pivots[confirmed_count].low_tr.lowest_HALow_idx] == 1.0) && !low_cand_active) {
-         high_cand_active = false;
-         low_cand_active = true;
-         PivotLowBuffer[confirmed_pivots[confirmed_count].low_tr.lowest_HALow_idx] = HALow[confirmed_pivots[confirmed_count].low_tr.lowest_HALow_idx];
-         confirmed_count++;
+      else if(confirmed_pivots[confirmed_count].type == PIVOT_TYPE_NONE || confirmed_pivots[confirmed_count].type == PIVOT_TYPE_HIGH) {
+         // No active candidate low pivot. Update low tracker on current parent pivot.
+         if(HAHigh[i] < confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh) {
+            confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh = HAHigh[i];
+         }
+         if(HALow[i] < confirmed_pivots[confirmed_count].low_tr.lowest_HALow) {
+            confirmed_pivots[confirmed_count].low_tr.lowest_HALow = HALow[i];
+            confirmed_pivots[confirmed_count].low_tr.lowest_HALow_idx = i;
+         }
          
-         //confirmed_pivots[confirmed_count] = confirmed_pivots[confirmed_count - 1];
+         double dome_dist = confirmed_pivots[confirmed_count].low_tr.start_high_price - confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh;
+         int cand_idx = confirmed_pivots[confirmed_count].low_tr.lowest_HALow_idx;
          
-         confirmed_pivots[confirmed_count].type = PIVOT_TYPE_LOW;
-         confirmed_pivots[confirmed_count].bar_idx = confirmed_pivots[confirmed_count - 1].low_tr.lowest_HALow_idx;
-         confirmed_pivots[confirmed_count].anchor_price = confirmed_pivots[confirmed_count - 1].low_tr.lowest_HALow;
-         confirmed_pivots[confirmed_count].dome_extreme = confirmed_pivots[confirmed_count - 1].dome_extreme;
-         
-         confirmed_pivots[confirmed_count].low_tr.start_high_price = confirmed_pivots[confirmed_count - 1].low_tr.start_high_price; // static
-         confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh = confirmed_pivots[confirmed_count - 1].low_tr.lowest_HAHigh; // dynamic
-         confirmed_pivots[confirmed_count].low_tr.lowest_HALow = confirmed_pivots[confirmed_count - 1].low_tr.lowest_HALow; // dynamic
-         confirmed_pivots[confirmed_count].low_tr.lowest_HALow_idx = confirmed_pivots[confirmed_count - 1].low_tr.lowest_HALow_idx; // dynamic
-
-         confirmed_pivots[confirmed_count].high_tr.start_low_price = confirmed_pivots[confirmed_count - 1].low_tr.lowest_HALow; // static
-         confirmed_pivots[confirmed_count].high_tr.highest_HALow = confirmed_pivots[confirmed_count - 1].low_tr.highest_HALow; // dynamic
-         confirmed_pivots[confirmed_count].high_tr.highest_HAHigh = HAHigh[confirmed_pivots[confirmed_count].bar_idx]; // dynamic
-         confirmed_pivots[confirmed_count].high_tr.highest_HAHigh_idx = confirmed_pivots[confirmed_count].bar_idx; // dynamic
-
-      } else if ((confirmed_pivots[confirmed_count].dome_extreme > 2.0 * g_spread_price) && (HAColor[confirmed_pivots[confirmed_count].low_tr.lowest_HALow_idx] == 0.0)) {
-      
+         if(dome_dist > 2.5 * g_spread_price && HAColor[cand_idx] == 1.0) {
+            low_cand_active = true;
+            high_cand_active = false;
+            
+            PivotLowBuffer[cand_idx] = HALow[cand_idx];
+            
+            confirmed_count++;
+            EnsurePivotArrayCapacity(confirmed_count + 5);
+            
+            confirmed_pivots[confirmed_count].type = PIVOT_TYPE_LOW;
+            confirmed_pivots[confirmed_count].bar_idx = cand_idx;
+            confirmed_pivots[confirmed_count].anchor_price = HALow[cand_idx];
+            confirmed_pivots[confirmed_count].dome_extreme = dome_dist;
+            
+            // Initialize High Pivot tracker from new Low Pivot
+            confirmed_pivots[confirmed_count].high_tr.start_low_price = HALow[cand_idx];
+            confirmed_pivots[confirmed_count].high_tr.highest_HALow = HALow[cand_idx];
+            confirmed_pivots[confirmed_count].high_tr.highest_HAHigh = HAHigh[cand_idx];
+            confirmed_pivots[confirmed_count].high_tr.highest_HAHigh_idx = cand_idx;
+            
+            // Scan bars from cand_idx + 1 up to current bar i to aggregate high tracker data
+            for(int k = cand_idx + 1; k <= i; k++) {
+               if(HALow[k] > confirmed_pivots[confirmed_count].high_tr.highest_HALow) {
+                  confirmed_pivots[confirmed_count].high_tr.highest_HALow = HALow[k];
+               }
+               if(HAHigh[k] > confirmed_pivots[confirmed_count].high_tr.highest_HAHigh) {
+                  confirmed_pivots[confirmed_count].high_tr.highest_HAHigh = HAHigh[k];
+                  confirmed_pivots[confirmed_count].high_tr.highest_HAHigh_idx = k;
+               }
+            }
+         }
       }
 
       //------------------------------------------------------------------
       // 2. UPDATE CANDIDATE HIGH PIVOT TRACKING
       //------------------------------------------------------------------
-      // populate this section with the mirrored logic of low pivot tracking
+      if(high_cand_active) {
+         // Active High Pivot candidate is plotted at confirmed_pivots[confirmed_count].
+         // Track higher HALow and higher HAHigh from the parent pivot (confirmed_pivots[confirmed_count - 1]).
+         int parent_idx = confirmed_count - 1;
+         
+         if(HALow[i] > confirmed_pivots[parent_idx].high_tr.highest_HALow) {
+            confirmed_pivots[parent_idx].high_tr.highest_HALow = HALow[i];
+         }
+         
+         if(HAHigh[i] > confirmed_pivots[parent_idx].high_tr.highest_HAHigh) {
+            confirmed_pivots[parent_idx].high_tr.highest_HAHigh = HAHigh[i];
+            confirmed_pivots[parent_idx].high_tr.highest_HAHigh_idx = i;
+            
+            // Anchor repaints higher
+            int old_bar = confirmed_pivots[confirmed_count].bar_idx;
+            
+            if(HAColor[i] == 0.0) { // DodgerBlue candle -> valid high pivot repaints higher
+               PivotHighBuffer[old_bar] = 0.0;
+               PivotHighBuffer[i] = HAHigh[i];
+               
+               confirmed_pivots[confirmed_count].bar_idx = i;
+               confirmed_pivots[confirmed_count].anchor_price = HAHigh[i];
+               confirmed_pivots[confirmed_count].dome_extreme = confirmed_pivots[parent_idx].high_tr.highest_HALow - confirmed_pivots[parent_idx].high_tr.start_low_price;
+               
+               // Reset Low Pivot tracker for this active High Pivot starting from new anchor position i
+               confirmed_pivots[confirmed_count].low_tr.start_high_price = HAHigh[i];
+               confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh = HAHigh[i];
+               confirmed_pivots[confirmed_count].low_tr.lowest_HALow = HALow[i];
+               confirmed_pivots[confirmed_count].low_tr.lowest_HALow_idx = i;
+            }
+            else if(HAColor[i] == 1.0) { // Red candle -> invalid, remove plot and rollback state
+               PivotHighBuffer[old_bar] = 0.0;
+               high_cand_active = false;
+               
+               // Merge tracked low values from removed pivot into parent pivot
+               if(confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh < confirmed_pivots[parent_idx].low_tr.lowest_HAHigh) {
+                  confirmed_pivots[parent_idx].low_tr.lowest_HAHigh = confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh;
+               }
+               if(confirmed_pivots[confirmed_count].low_tr.lowest_HALow < confirmed_pivots[parent_idx].low_tr.lowest_HALow) {
+                  confirmed_pivots[parent_idx].low_tr.lowest_HALow = confirmed_pivots[confirmed_count].low_tr.lowest_HALow;
+                  confirmed_pivots[parent_idx].low_tr.lowest_HALow_idx = confirmed_pivots[confirmed_count].low_tr.lowest_HALow_idx;
+               }
+               
+               confirmed_count--;
+            }
+         }
+      }
+      else if(confirmed_pivots[confirmed_count].type == PIVOT_TYPE_NONE || confirmed_pivots[confirmed_count].type == PIVOT_TYPE_LOW) {
+         // No active candidate high pivot. Update high tracker on current parent pivot.
+         if(HALow[i] > confirmed_pivots[confirmed_count].high_tr.highest_HALow) {
+            confirmed_pivots[confirmed_count].high_tr.highest_HALow = HALow[i];
+         }
+         if(HAHigh[i] > confirmed_pivots[confirmed_count].high_tr.highest_HAHigh) {
+            confirmed_pivots[confirmed_count].high_tr.highest_HAHigh = HAHigh[i];
+            confirmed_pivots[confirmed_count].high_tr.highest_HAHigh_idx = i;
+         }
+         
+         double dome_dist = confirmed_pivots[confirmed_count].high_tr.highest_HALow - confirmed_pivots[confirmed_count].high_tr.start_low_price;
+         int cand_idx = confirmed_pivots[confirmed_count].high_tr.highest_HAHigh_idx;
+         
+         if(dome_dist > 2.5 * g_spread_price && HAColor[cand_idx] == 0.0) {
+            high_cand_active = true;
+            low_cand_active = false;
+            
+            PivotHighBuffer[cand_idx] = HAHigh[cand_idx];
+            
+            confirmed_count++;
+            EnsurePivotArrayCapacity(confirmed_count + 5);
+            
+            confirmed_pivots[confirmed_count].type = PIVOT_TYPE_HIGH;
+            confirmed_pivots[confirmed_count].bar_idx = cand_idx;
+            confirmed_pivots[confirmed_count].anchor_price = HAHigh[cand_idx];
+            confirmed_pivots[confirmed_count].dome_extreme = dome_dist;
+            
+            // Initialize Low Pivot tracker from new High Pivot
+            confirmed_pivots[confirmed_count].low_tr.start_high_price = HAHigh[cand_idx];
+            confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh = HAHigh[cand_idx];
+            confirmed_pivots[confirmed_count].low_tr.lowest_HALow = HALow[cand_idx];
+            confirmed_pivots[confirmed_count].low_tr.lowest_HALow_idx = cand_idx;
+            
+            // Scan bars from cand_idx + 1 up to current bar i to aggregate low tracker data
+            for(int k = cand_idx + 1; k <= i; k++) {
+               if(HAHigh[k] < confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh) {
+                  confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh = HAHigh[k];
+               }
+               if(HALow[k] < confirmed_pivots[confirmed_count].low_tr.lowest_HALow) {
+                  confirmed_pivots[confirmed_count].low_tr.lowest_HALow = HALow[k];
+                  confirmed_pivots[confirmed_count].low_tr.lowest_HALow_idx = k;
+               }
+            }
+         }
+      }
 
       
    }
