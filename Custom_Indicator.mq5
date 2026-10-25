@@ -5,8 +5,8 @@
 #property link      "https://www.mql5.com"
 #property version   "1.00"
 #property indicator_chart_window
-#property indicator_buffers 9
-#property indicator_plots   5
+#property indicator_buffers 12
+#property indicator_plots   6
 
 //--- Plot 1: Heiken Ashi bars
 #property indicator_type1   DRAW_COLOR_BARS
@@ -33,6 +33,13 @@
 #property indicator_color5  clrMagenta
 #property indicator_label5  "Pivot High"
 
+//--- Plot 6: Dotted Zigzag lines
+#property indicator_type6   DRAW_COLOR_ZIGZAG
+#property indicator_color6  clrAqua, clrMagenta
+#property indicator_style6  STYLE_DOT
+#property indicator_width6  1
+#property indicator_label6  "Zigzag"
+
 //--- input parameters
 input datetime InpHistoricalDate = 0;   // Historical Date (YYYY.MM.DD) - 0 for Current Day
 
@@ -50,6 +57,11 @@ double HighBuffer[];
 //--- Pivot arrow buffers (7-8)
 double PivotLowBuffer[];
 double PivotHighBuffer[];
+
+//--- Zigzag buffers (9-11)
+double ZZBuffer1[];
+double ZZBuffer2[];
+double ZZColorBuffer[];
 
 double g_spread_price = 0.0;
 
@@ -120,6 +132,11 @@ int OnInit()
    SetIndexBuffer(7, PivotLowBuffer,  INDICATOR_DATA);
    SetIndexBuffer(8, PivotHighBuffer, INDICATOR_DATA);
 
+   //--- Zigzag plot
+   SetIndexBuffer(9,  ZZBuffer1,     INDICATOR_DATA);
+   SetIndexBuffer(10, ZZBuffer2,     INDICATOR_DATA);
+   SetIndexBuffer(11, ZZColorBuffer, INDICATOR_COLOR_INDEX);
+
    //--- Set series orientation AFTER binding
    ArraySetAsSeries(HAOpen, false);
    ArraySetAsSeries(HAHigh, false);
@@ -130,6 +147,9 @@ int OnInit()
    ArraySetAsSeries(HighBuffer, false);
    ArraySetAsSeries(PivotLowBuffer, false);
    ArraySetAsSeries(PivotHighBuffer, false);
+   ArraySetAsSeries(ZZBuffer1, false);
+   ArraySetAsSeries(ZZBuffer2, false);
+   ArraySetAsSeries(ZZColorBuffer, false);
 
    //--- Plot properties for Heiken Ashi
    PlotIndexSetDouble(0, PLOT_EMPTY_VALUE, 0.0);
@@ -153,6 +173,9 @@ int OnInit()
    PlotIndexSetDouble(4, PLOT_EMPTY_VALUE, 0.0);
    PlotIndexSetInteger(4, PLOT_ARROW, 159);
    PlotIndexSetInteger(4, PLOT_ARROW_SHIFT, -10);
+
+   //--- Plot properties for Zigzag (Plot index 5)
+   PlotIndexSetDouble(5, PLOT_EMPTY_VALUE, 0.0);
 
    // Fetch broker-reported spread once
    g_spread_price = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) * _Point;
@@ -220,6 +243,9 @@ int OnCalculate(const int rates_total,
       ArrayInitialize(HighBuffer, 0.0);
       ArrayInitialize(PivotLowBuffer, 0.0);
       ArrayInitialize(PivotHighBuffer, 0.0);
+      ArrayInitialize(ZZBuffer1, 0.0);
+      ArrayInitialize(ZZBuffer2, 0.0);
+      ArrayInitialize(ZZColorBuffer, 0.0);
 
       // First bar calculation (bootstrapping using previous bar if available)
       if(first_idx > 0) {
@@ -316,6 +342,14 @@ int OnCalculate(const int rates_total,
                PivotLowBuffer[old_bar] = 0.0;
                PivotLowBuffer[i] = HALow[i];
                
+               ZZBuffer1[old_bar] = 0.0;
+               ZZBuffer2[old_bar] = 0.0;
+               ZZColorBuffer[old_bar] = 0.0;
+
+               ZZBuffer1[i] = HALow[i];
+               ZZBuffer2[i] = HALow[i];
+               ZZColorBuffer[i] = 1.0;
+               
                confirmed_pivots[confirmed_count].bar_idx = i;
                confirmed_pivots[confirmed_count].anchor_price = HALow[i];
                confirmed_pivots[confirmed_count].dome_extreme = confirmed_pivots[parent_idx].low_tr.start_high_price - confirmed_pivots[parent_idx].low_tr.lowest_HAHigh;
@@ -328,6 +362,9 @@ int OnCalculate(const int rates_total,
             }
             else if(HAColor[i] == 0.0) { // DodgerBlue candle -> invalid, remove plot and rollback state
                PivotLowBuffer[old_bar] = 0.0;
+               ZZBuffer1[old_bar] = 0.0;
+               ZZBuffer2[old_bar] = 0.0;
+               ZZColorBuffer[old_bar] = 0.0;
                low_cand_active = false;
                
                // Merge tracked high values from removed pivot into parent pivot
@@ -361,6 +398,9 @@ int OnCalculate(const int rates_total,
             high_cand_active = false;
             
             PivotLowBuffer[cand_idx] = HALow[cand_idx];
+            ZZBuffer1[cand_idx] = HALow[cand_idx];
+            ZZBuffer2[cand_idx] = HALow[cand_idx];
+            ZZColorBuffer[cand_idx] = 1.0;
             
             confirmed_count++;
             EnsurePivotArrayCapacity(confirmed_count + 5);
@@ -412,6 +452,14 @@ int OnCalculate(const int rates_total,
                PivotHighBuffer[old_bar] = 0.0;
                PivotHighBuffer[i] = HAHigh[i];
                
+               ZZBuffer1[old_bar] = 0.0;
+               ZZBuffer2[old_bar] = 0.0;
+               ZZColorBuffer[old_bar] = 0.0;
+
+               ZZBuffer1[i] = HAHigh[i];
+               ZZBuffer2[i] = HAHigh[i];
+               ZZColorBuffer[i] = 0.0;
+               
                confirmed_pivots[confirmed_count].bar_idx = i;
                confirmed_pivots[confirmed_count].anchor_price = HAHigh[i];
                confirmed_pivots[confirmed_count].dome_extreme = confirmed_pivots[parent_idx].high_tr.highest_HALow - confirmed_pivots[parent_idx].high_tr.start_low_price;
@@ -424,6 +472,9 @@ int OnCalculate(const int rates_total,
             }
             else if(HAColor[i] == 1.0) { // Red candle -> invalid, remove plot and rollback state
                PivotHighBuffer[old_bar] = 0.0;
+               ZZBuffer1[old_bar] = 0.0;
+               ZZBuffer2[old_bar] = 0.0;
+               ZZColorBuffer[old_bar] = 0.0;
                high_cand_active = false;
                
                // Merge tracked low values from removed pivot into parent pivot
@@ -457,6 +508,9 @@ int OnCalculate(const int rates_total,
             low_cand_active = false;
             
             PivotHighBuffer[cand_idx] = HAHigh[cand_idx];
+            ZZBuffer1[cand_idx] = HAHigh[cand_idx];
+            ZZBuffer2[cand_idx] = HAHigh[cand_idx];
+            ZZColorBuffer[cand_idx] = 0.0;
             
             confirmed_count++;
             EnsurePivotArrayCapacity(confirmed_count + 5);
