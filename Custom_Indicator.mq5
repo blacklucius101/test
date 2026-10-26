@@ -92,7 +92,7 @@ struct PivotInfo { // HACandle tracker
    ENUM_PIVOT_TYPE type;
    int    bar_idx;
    double anchor_price;
-   double dome_extreme;
+   double dome_dist;
    LowTracker  low_tr;
    HighTracker high_tr;
 };
@@ -268,7 +268,7 @@ int OnCalculate(const int rates_total,
       confirmed_pivots[0].type = PIVOT_TYPE_NONE;
       confirmed_pivots[0].bar_idx = first_idx;
       confirmed_pivots[0].anchor_price = 0.0;
-      confirmed_pivots[0].dome_extreme = 0.0;
+      confirmed_pivots[0].dome_dist = 0.0;
 
       confirmed_pivots[0].low_tr.start_high_price = HAHigh[first_idx]; // static
       confirmed_pivots[0].low_tr.lowest_HAHigh = HAHigh[first_idx]; // dynamic
@@ -329,16 +329,17 @@ int OnCalculate(const int rates_total,
          
          if(HAHigh[i] < confirmed_pivots[parent_idx].low_tr.lowest_HAHigh) {
             confirmed_pivots[parent_idx].low_tr.lowest_HAHigh = HAHigh[i];
+            confirmed_pivots[parent_idx].dome_dist = confirmed_pivots[parent_idx].low_tr.start_high_price - confirmed_pivots[parent_idx].low_tr.lowest_HAHigh; // segment dome_dist is recorded at segment start
          }
          
          if(HALow[i] < confirmed_pivots[parent_idx].low_tr.lowest_HALow) {
-            confirmed_pivots[parent_idx].low_tr.lowest_HALow = HALow[i];
-            confirmed_pivots[parent_idx].low_tr.lowest_HALow_idx = i;
-            
             // Anchor repaints lower
             int old_bar = confirmed_pivots[confirmed_count].bar_idx;
             
             if(HAColor[i] == 1.0) { // Red candle -> valid low pivot repaints lower
+               confirmed_pivots[parent_idx].low_tr.lowest_HALow = HALow[i];
+               confirmed_pivots[parent_idx].low_tr.lowest_HALow_idx = i;
+            
                PivotLowBuffer[old_bar] = 0.0;
                PivotLowBuffer[i] = HALow[i];
                
@@ -352,15 +353,16 @@ int OnCalculate(const int rates_total,
                
                confirmed_pivots[confirmed_count].bar_idx = i;
                confirmed_pivots[confirmed_count].anchor_price = HALow[i];
-               confirmed_pivots[confirmed_count].dome_extreme = confirmed_pivots[parent_idx].low_tr.start_high_price - confirmed_pivots[parent_idx].low_tr.lowest_HAHigh;
                
                // Reset High Pivot tracker for this active Low Pivot starting from new anchor position i
                confirmed_pivots[confirmed_count].high_tr.start_low_price = HALow[i];
                confirmed_pivots[confirmed_count].high_tr.highest_HALow = HALow[i];
-               confirmed_pivots[confirmed_count].high_tr.highest_HAHigh = HAHigh[i];
+               confirmed_pivots[confirmed_count].high_tr.highest_HAHigh = HALow[i];
                confirmed_pivots[confirmed_count].high_tr.highest_HAHigh_idx = i;
+               
+               confirmed_pivots[confirmed_count].dome_dist = confirmed_pivots[confirmed_count].high_tr.highest_HALow - confirmed_pivots[confirmed_count].high_tr.start_low_price;
             }
-            else if(HAColor[i] == 0.0) { // DodgerBlue candle -> invalid, remove plot and rollback state
+            /* else if(HAColor[i] == 0.0) { // DodgerBlue candle -> invalid, remove plot and rollback state
                PivotLowBuffer[old_bar] = 0.0;
                ZZBuffer1[old_bar] = 0.0;
                ZZBuffer2[old_bar] = 0.0;
@@ -377,23 +379,23 @@ int OnCalculate(const int rates_total,
                }
                
                confirmed_count--;
-            }
+            }*/
          }
       }
       else if(confirmed_pivots[confirmed_count].type == PIVOT_TYPE_NONE || confirmed_pivots[confirmed_count].type == PIVOT_TYPE_HIGH) {
          // No active candidate low pivot. Update low tracker on current parent pivot.
          if(HAHigh[i] < confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh) {
             confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh = HAHigh[i];
+            confirmed_pivots[confirmed_count].dome_dist = confirmed_pivots[confirmed_count].low_tr.start_high_price - confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh;
          }
-         if(HALow[i] < confirmed_pivots[confirmed_count].low_tr.lowest_HALow) {
+         if(HAColor[i] == 1.0 && HALow[i] < confirmed_pivots[confirmed_count].low_tr.lowest_HALow) {
             confirmed_pivots[confirmed_count].low_tr.lowest_HALow = HALow[i];
             confirmed_pivots[confirmed_count].low_tr.lowest_HALow_idx = i;
          }
          
-         double dome_dist = confirmed_pivots[confirmed_count].low_tr.start_high_price - confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh;
          int cand_idx = confirmed_pivots[confirmed_count].low_tr.lowest_HALow_idx;
          
-         if(dome_dist > 2.5 * g_spread_price && HAColor[cand_idx] == 1.0) {
+         if(confirmed_pivots[confirmed_count].dome_dist > 2.0 * g_spread_price && HAColor[cand_idx] == 1.0) {
             low_cand_active = true;
             high_cand_active = false;
             
@@ -408,20 +410,20 @@ int OnCalculate(const int rates_total,
             confirmed_pivots[confirmed_count].type = PIVOT_TYPE_LOW;
             confirmed_pivots[confirmed_count].bar_idx = cand_idx;
             confirmed_pivots[confirmed_count].anchor_price = HALow[cand_idx];
-            confirmed_pivots[confirmed_count].dome_extreme = dome_dist;
             
             // Initialize High Pivot tracker from new Low Pivot
             confirmed_pivots[confirmed_count].high_tr.start_low_price = HALow[cand_idx];
             confirmed_pivots[confirmed_count].high_tr.highest_HALow = HALow[cand_idx];
-            confirmed_pivots[confirmed_count].high_tr.highest_HAHigh = HAHigh[cand_idx];
+            confirmed_pivots[confirmed_count].high_tr.highest_HAHigh = HALow[cand_idx]; // HAHigh[cand_idx] only recorded on DodgerBlue HACandle
             confirmed_pivots[confirmed_count].high_tr.highest_HAHigh_idx = cand_idx;
             
             // Scan bars from cand_idx + 1 up to current bar i to aggregate high tracker data
             for(int k = cand_idx + 1; k <= i; k++) {
                if(HALow[k] > confirmed_pivots[confirmed_count].high_tr.highest_HALow) {
                   confirmed_pivots[confirmed_count].high_tr.highest_HALow = HALow[k];
+                  confirmed_pivots[confirmed_count].dome_dist = confirmed_pivots[confirmed_count].high_tr.highest_HALow - confirmed_pivots[confirmed_count].high_tr.start_low_price;
                }
-               if(HAHigh[k] > confirmed_pivots[confirmed_count].high_tr.highest_HAHigh) {
+               if(HAColor[k] == 0.0 && HAHigh[k] > confirmed_pivots[confirmed_count].high_tr.highest_HAHigh) {
                   confirmed_pivots[confirmed_count].high_tr.highest_HAHigh = HAHigh[k];
                   confirmed_pivots[confirmed_count].high_tr.highest_HAHigh_idx = k;
                }
@@ -439,16 +441,17 @@ int OnCalculate(const int rates_total,
          
          if(HALow[i] > confirmed_pivots[parent_idx].high_tr.highest_HALow) {
             confirmed_pivots[parent_idx].high_tr.highest_HALow = HALow[i];
+            confirmed_pivots[parent_idx].dome_dist = confirmed_pivots[parent_idx].high_tr.highest_HALow - confirmed_pivots[parent_idx].high_tr.start_low_price;  // segment dome_dist is recorded at segment start
          }
          
          if(HAHigh[i] > confirmed_pivots[parent_idx].high_tr.highest_HAHigh) {
-            confirmed_pivots[parent_idx].high_tr.highest_HAHigh = HAHigh[i];
-            confirmed_pivots[parent_idx].high_tr.highest_HAHigh_idx = i;
-            
             // Anchor repaints higher
             int old_bar = confirmed_pivots[confirmed_count].bar_idx;
             
             if(HAColor[i] == 0.0) { // DodgerBlue candle -> valid high pivot repaints higher
+               confirmed_pivots[parent_idx].high_tr.highest_HAHigh = HAHigh[i];
+               confirmed_pivots[parent_idx].high_tr.highest_HAHigh_idx = i;
+               
                PivotHighBuffer[old_bar] = 0.0;
                PivotHighBuffer[i] = HAHigh[i];
                
@@ -462,15 +465,16 @@ int OnCalculate(const int rates_total,
                
                confirmed_pivots[confirmed_count].bar_idx = i;
                confirmed_pivots[confirmed_count].anchor_price = HAHigh[i];
-               confirmed_pivots[confirmed_count].dome_extreme = confirmed_pivots[parent_idx].high_tr.highest_HALow - confirmed_pivots[parent_idx].high_tr.start_low_price;
                
                // Reset Low Pivot tracker for this active High Pivot starting from new anchor position i
                confirmed_pivots[confirmed_count].low_tr.start_high_price = HAHigh[i];
                confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh = HAHigh[i];
-               confirmed_pivots[confirmed_count].low_tr.lowest_HALow = HALow[i];
+               confirmed_pivots[confirmed_count].low_tr.lowest_HALow = HAHigh[i]; // HALow[cand_idx] only recorded on Red HACandle
                confirmed_pivots[confirmed_count].low_tr.lowest_HALow_idx = i;
+               
+               confirmed_pivots[confirmed_count].dome_dist = confirmed_pivots[confirmed_count].low_tr.start_high_price - confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh;
             }
-            else if(HAColor[i] == 1.0) { // Red candle -> invalid, remove plot and rollback state
+            /*else if(HAColor[i] == 1.0) { // Red candle -> invalid, remove plot and rollback state
                PivotHighBuffer[old_bar] = 0.0;
                ZZBuffer1[old_bar] = 0.0;
                ZZBuffer2[old_bar] = 0.0;
@@ -487,23 +491,23 @@ int OnCalculate(const int rates_total,
                }
                
                confirmed_count--;
-            }
+            }*/
          }
       }
       else if(confirmed_pivots[confirmed_count].type == PIVOT_TYPE_NONE || confirmed_pivots[confirmed_count].type == PIVOT_TYPE_LOW) {
          // No active candidate high pivot. Update high tracker on current parent pivot.
          if(HALow[i] > confirmed_pivots[confirmed_count].high_tr.highest_HALow) {
             confirmed_pivots[confirmed_count].high_tr.highest_HALow = HALow[i];
+            confirmed_pivots[confirmed_count].dome_dist = confirmed_pivots[confirmed_count].high_tr.highest_HALow - confirmed_pivots[confirmed_count].high_tr.start_low_price;
          }
-         if(HAHigh[i] > confirmed_pivots[confirmed_count].high_tr.highest_HAHigh) {
+         if(HAColor[i] == 0.0 && HAHigh[i] > confirmed_pivots[confirmed_count].high_tr.highest_HAHigh) {
             confirmed_pivots[confirmed_count].high_tr.highest_HAHigh = HAHigh[i];
             confirmed_pivots[confirmed_count].high_tr.highest_HAHigh_idx = i;
          }
          
-         double dome_dist = confirmed_pivots[confirmed_count].high_tr.highest_HALow - confirmed_pivots[confirmed_count].high_tr.start_low_price;
          int cand_idx = confirmed_pivots[confirmed_count].high_tr.highest_HAHigh_idx;
          
-         if(dome_dist > 2.5 * g_spread_price && HAColor[cand_idx] == 0.0) {
+         if(confirmed_pivots[confirmed_count].dome_dist > 2.0 * g_spread_price && HAColor[cand_idx] == 0.0) {
             high_cand_active = true;
             low_cand_active = false;
             
@@ -518,20 +522,20 @@ int OnCalculate(const int rates_total,
             confirmed_pivots[confirmed_count].type = PIVOT_TYPE_HIGH;
             confirmed_pivots[confirmed_count].bar_idx = cand_idx;
             confirmed_pivots[confirmed_count].anchor_price = HAHigh[cand_idx];
-            confirmed_pivots[confirmed_count].dome_extreme = dome_dist;
             
             // Initialize Low Pivot tracker from new High Pivot
             confirmed_pivots[confirmed_count].low_tr.start_high_price = HAHigh[cand_idx];
             confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh = HAHigh[cand_idx];
-            confirmed_pivots[confirmed_count].low_tr.lowest_HALow = HALow[cand_idx];
+            confirmed_pivots[confirmed_count].low_tr.lowest_HALow = HAHigh[cand_idx]; // HALow[cand_idx] only recorded on Red HACandle
             confirmed_pivots[confirmed_count].low_tr.lowest_HALow_idx = cand_idx;
             
             // Scan bars from cand_idx + 1 up to current bar i to aggregate low tracker data
             for(int k = cand_idx + 1; k <= i; k++) {
                if(HAHigh[k] < confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh) {
                   confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh = HAHigh[k];
+                  confirmed_pivots[confirmed_count].dome_dist = confirmed_pivots[confirmed_count].low_tr.start_high_price - confirmed_pivots[confirmed_count].low_tr.lowest_HAHigh;
                }
-               if(HALow[k] < confirmed_pivots[confirmed_count].low_tr.lowest_HALow) {
+               if(HAColor[k] == 0.0 && HALow[k] < confirmed_pivots[confirmed_count].low_tr.lowest_HALow) {
                   confirmed_pivots[confirmed_count].low_tr.lowest_HALow = HALow[k];
                   confirmed_pivots[confirmed_count].low_tr.lowest_HALow_idx = k;
                }
