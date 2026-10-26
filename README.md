@@ -1,1 +1,2 @@
 - To `Custom_Indicator` I want to add a short orange dotted horizontal line at each dome midpoint (ie. half of `dome_dist`). Each midpoint line must start at the bar where the dome extreme (ie. highest HALow, or lowest HAHigh) occurs, extend exactly 5 bars to the right, and have no ray extension.
+- The dome midpoint line is only plotted for confirmed pivots and should evolve alongside its associated pivot.
