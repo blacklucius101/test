@@ -1,1 +1,1 @@
-In addition to the dome midpoint line in `Custom_Indicator`, I want to add a range midpoint line (ie. half of the distance from pivot to pivot). It will use the same positioning parameters as dome midpoint line.
+In `Custom_Indicator`, I want to add a per day indicator that plots custom bars for closed candles. The custom bars have the open and close at the midpoint of the candle, while maintaining high and low. The custom are simply markers for closed candle midpoints.
