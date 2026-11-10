@@ -1,4 +1,38 @@
 //+------------------------------------------------------------------+
+//|                                             Custom_Indicator.mq5 |
+//+------------------------------------------------------------------+
+#property copyright "@mobilebass"
+#property link      "https://www.mql5.com"
+#property version   "1.00"
+#property indicator_chart_window
+
+//--- Plot 1: Midpoint bars
+#property indicator_type1   DRAW_BARS
+#property indicator_color1  clrDodgerBlue
+
+//--- input parameters
+input datetime InpHistoricalDate = 0;   // Historical Date (YYYY.MM.DD) - 0 for Current Day
+
+datetime targetDayStart = 0;
+datetime targetDayEnd = 0;
+
+//+------------------------------------------------------------------+
+//| Custom indicator initialization function                         |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+   IndicatorSetInteger(INDICATOR_DIGITS, _Digits);
+
+   //--- name for DataWindow
+   IndicatorSetString(INDICATOR_SHORTNAME, "Custom Indicator");
+
+   targetDayStart = 0;
+   targetDayEnd = 0;
+   
+   return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
 //| Custom indicator iteration function                              |
 //+------------------------------------------------------------------+
 int OnCalculate(const int rates_total,
@@ -12,7 +46,16 @@ int OnCalculate(const int rates_total,
                 const long &volume[],
                 const int &spread[])
 {
-   if(rates_total < 2) return 0;
+   // Explicitly use chronological indexing:
+   // index 0 = oldest bar
+   // index rates_total - 1 = newest bar
+   ArraySetAsSeries(time, false);
+   ArraySetAsSeries(open, false);
+   ArraySetAsSeries(high, false);
+   ArraySetAsSeries(low, false);
+   ArraySetAsSeries(close, false);
+	
+	if(rates_total < 2) return 0;
 
    // Determine target day boundaries
    datetime lastBarTime = time[rates_total - 1];
@@ -60,3 +103,4 @@ int OnCalculate(const int rates_total,
 
    return(rates_total);
 }
+//+------------------------------------------------------------------+
